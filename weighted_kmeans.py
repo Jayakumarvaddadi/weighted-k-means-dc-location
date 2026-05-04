@@ -1,3 +1,7 @@
+import os
+
+print("FILES IN DIRECTORY:")
+print(os.listdir())
 import pandas as pd
 import numpy as np
 from sklearn.cluster import KMeans
@@ -28,6 +32,12 @@ kmeans.fit(X, sample_weight=weights)
 df['cluster'] = kmeans.labels_
 centroids = kmeans.cluster_centers_
 
+# Remove old outputs
+import os
+
+for file in ["clustered_output.xlsx", "dc_locations.xlsx", "map.html"]:
+    if os.path.exists(file):
+        os.remove(file)
 # Save output
 df.to_excel('clustered_output.xlsx', index=False)
 
