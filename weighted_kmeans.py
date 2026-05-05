@@ -42,7 +42,16 @@ for file in ["clustered_output.xlsx", "dc_locations.xlsx", "map.html"]:
 df.to_excel('clustered_output.xlsx', index=False)
 
 centroids_df = pd.DataFrame(centroids, columns=['lat', 'long'])
-centroids_df.to_excel('dc_locations.xlsx', index=False)
+import os
+
+dc_file = "dc_locations.xlsx"
+
+# Delete old file if exists
+if os.path.exists(dc_file):
+    os.remove(dc_file)
+
+# Save new file
+centroids_df.to_excel(dc_file, index=False)
 
 # Create map
 map_india = folium.Map(location=[22.5, 78.9], zoom_start=5)
