@@ -66,6 +66,6 @@ for _, row in centroids_df.iterrows():
         icon=folium.Icon(color='red', icon='star')
     ).add_to(map_india)
 
-map_india.save("map.html")
+map_india.save("index.html")
 
 print("Done! Files generated.")
