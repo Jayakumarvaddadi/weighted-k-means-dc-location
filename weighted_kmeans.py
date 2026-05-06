@@ -43,29 +43,73 @@ df['sales'] = df['sales'].clip(lower=1)
 X = df[['lat', 'long']].values
 weights = df['sales'].values
 
-# Weighted K-Means
-kmeans = KMeans(n_clusters=4, random_state=42, n_init=10)
-kmeans.fit(X, sample_weight=weights)
+# Find optimum K automatically
 
-df['cluster'] = kmeans.labels_
-centroids = kmeans.cluster_centers_
-# Assign DC coordinates to each store
-df['dc_lat'] = df['cluster'].apply(lambda x: centroids[x][0])
-df['dc_long'] = df['cluster'].apply(lambda x: centroids[x][1])
+max_allowed_distance = 700
 
-# Calculate haversine distance
-df['distance_km'] = df.apply(
-    lambda row: haversine(
-        row['lat'],
-        row['long'],
-        row['dc_lat'],
-        row['dc_long']
-    ),
-    axis=1
-)
+best_k = None
+best_df = None
+best_centroids = None
 
-# Optional logistics KPI
-df['weighted_distance'] = df['sales'] * df['distance_km']
+for k in range(2, 15):
+
+    kmeans = KMeans(
+        n_clusters=k,
+        random_state=42,
+        n_init=10
+    )
+
+    kmeans.fit(X, sample_weight=weights)
+
+    temp_df = df.copy()
+
+    temp_df['cluster'] = kmeans.labels_
+
+    centroids = kmeans.cluster_centers_
+
+    # Assign DC coordinates
+    temp_df['dc_lat'] = temp_df['cluster'].apply(
+        lambda x: centroids[x][0]
+    )
+
+    temp_df['dc_long'] = temp_df['cluster'].apply(
+        lambda x: centroids[x][1]
+    )
+
+    # Calculate haversine distance
+    temp_df['distance_km'] = temp_df.apply(
+        lambda row: haversine(
+            row['lat'],
+            row['long'],
+            row['dc_lat'],
+            row['dc_long']
+        ),
+        axis=1
+    )
+
+    # Weighted logistics KPI
+    temp_df['weighted_distance'] = (
+        temp_df['sales'] * temp_df['distance_km']
+    )
+
+    max_distance = temp_df['distance_km'].max()
+
+    print(f"K={k}, Max Distance={max_distance:.2f} km")
+
+    # Stop when feasible
+    if max_distance <= max_allowed_distance:
+
+        best_k = k
+        best_df = temp_df
+        best_centroids = centroids
+
+        break
+
+# Final selected outputs
+df = best_df
+centroids = best_centroids
+
+print(f"\nOptimal K Found: {best_k}")
 
 # Remove old outputs
 import os
@@ -74,6 +118,7 @@ for file in [
     "clustered_output.xlsx",
     "dc_locations.xlsx",
     "store_dc_distances.xlsx",
+    "model_summary.xlsx",
     "index.html"
 ]:
     if os.path.exists(file):
@@ -97,6 +142,18 @@ distance_output.to_excel(
     index=False
 )
 
+# Save model summary
+
+summary_df = pd.DataFrame({
+    'optimal_k': [best_k],
+    'max_distance_km': [df['distance_km'].max()],
+    'avg_distance_km': [df['distance_km'].mean()]
+})
+
+summary_df.to_excel(
+    'model_summary.xlsx',
+    index=False
+)
 centroids_df = pd.DataFrame(centroids, columns=['lat', 'long'])
 import os
 
