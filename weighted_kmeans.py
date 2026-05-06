@@ -116,13 +116,22 @@ k = df['cluster'].nunique()
 colormap = cm.get_cmap('viridis', k)
 
 for _, row in df.iterrows():
+
     color = colors.to_hex(colormap(row['cluster']))
+
     folium.CircleMarker(
         location=[row['lat'], row['long']],
         radius=3,
         color=color,
         fill=True,
-        fill_color=color
+        fill_color=color,
+
+        popup=(
+            f"Cluster: {row['cluster']}<br>"
+            f"Distance: {row['distance_km']:.2f} km<br>"
+            f"Sales: {row['sales']}"
+        )
+
     ).add_to(map_india)
 
 for _, row in centroids_df.iterrows():
