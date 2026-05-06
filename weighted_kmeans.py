@@ -66,24 +66,26 @@ for k in range(2, 15):
     temp_df['cluster'] = kmeans.labels_
 
     centroids = kmeans.cluster_centers_
+
     # Convert centroids to nearest actual store locations
 
-real_centroids = []
+    real_centroids = []
 
-for center in centroids:
+    for center in centroids:
 
-    distances = np.sqrt(
-        (X[:,0] - center[0])**2 +
-        (X[:,1] - center[1])**2
-    )
+        distances = np.sqrt(
+            (X[:,0] - center[0])**2 +
+            (X[:,1] - center[1])**2
+        )
 
-    nearest_idx = np.argmin(distances)
+        nearest_idx = np.argmin(distances)
 
-    real_centroids.append(X[nearest_idx])
+        real_centroids.append(X[nearest_idx])
 
-centroids = np.array(real_centroids)
+    centroids = np.array(real_centroids)
 
     # Assign DC coordinates
+
     temp_df['dc_lat'] = temp_df['cluster'].apply(
         lambda x: centroids[x][0]
     )
@@ -93,6 +95,7 @@ centroids = np.array(real_centroids)
     )
 
     # Calculate haversine distance
+
     temp_df['distance_km'] = temp_df.apply(
         lambda row: haversine(
             row['lat'],
@@ -104,6 +107,7 @@ centroids = np.array(real_centroids)
     )
 
     # Weighted logistics KPI
+
     temp_df['weighted_distance'] = (
         temp_df['sales'] * temp_df['distance_km']
     )
@@ -113,6 +117,7 @@ centroids = np.array(real_centroids)
     print(f"K={k}, Max Distance={max_distance:.2f} km")
 
     # Stop when feasible
+
     if max_distance <= max_allowed_distance:
 
         best_k = k
@@ -122,6 +127,7 @@ centroids = np.array(real_centroids)
         break
 
 # Final selected outputs
+
 df = best_df
 centroids = best_centroids
 
