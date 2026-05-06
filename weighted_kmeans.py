@@ -8,7 +8,25 @@ from sklearn.cluster import KMeans
 import folium
 import matplotlib.cm as cm
 import matplotlib.colors as colors
+from math import radians, sin, cos, sqrt, atan2
 
+def haversine(lat1, lon1, lat2, lon2):
+
+    R = 6371  # Earth radius in km
+
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+
+    a = (
+        sin(dlat / 2) ** 2
+        + cos(radians(lat1))
+        * cos(radians(lat2))
+        * sin(dlon / 2) ** 2
+    )
+
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+
+    return R * c
 # Load data
 df = pd.read_excel('saavu2.xlsx')
 df.columns = df.columns.str.lower()
@@ -31,15 +49,53 @@ kmeans.fit(X, sample_weight=weights)
 
 df['cluster'] = kmeans.labels_
 centroids = kmeans.cluster_centers_
+# Assign DC coordinates to each store
+df['dc_lat'] = df['cluster'].apply(lambda x: centroids[x][0])
+df['dc_long'] = df['cluster'].apply(lambda x: centroids[x][1])
+
+# Calculate haversine distance
+df['distance_km'] = df.apply(
+    lambda row: haversine(
+        row['lat'],
+        row['long'],
+        row['dc_lat'],
+        row['dc_long']
+    ),
+    axis=1
+)
+
+# Optional logistics KPI
+df['weighted_distance'] = df['sales'] * df['distance_km']
 
 # Remove old outputs
 import os
 
-for file in ["clustered_output.xlsx", "dc_locations.xlsx", "map.html"]:
+for file in [
+    "clustered_output.xlsx",
+    "dc_locations.xlsx",
+    "store_dc_distances.xlsx",
+    "index.html"
+]:
     if os.path.exists(file):
         os.remove(file)
 # Save output
 df.to_excel('clustered_output.xlsx', index=False)
+# Save store-to-DC haversine distances
+distance_output = df[[
+    'lat',
+    'long',
+    'sales',
+    'cluster',
+    'dc_lat',
+    'dc_long',
+    'distance_km',
+    'weighted_distance'
+]]
+
+distance_output.to_excel(
+    'store_dc_distances.xlsx',
+    index=False
+)
 
 centroids_df = pd.DataFrame(centroids, columns=['lat', 'long'])
 import os
