@@ -66,6 +66,22 @@ for k in range(2, 15):
     temp_df['cluster'] = kmeans.labels_
 
     centroids = kmeans.cluster_centers_
+    # Convert centroids to nearest actual store locations
+
+real_centroids = []
+
+for center in centroids:
+
+    distances = np.sqrt(
+        (X[:,0] - center[0])**2 +
+        (X[:,1] - center[1])**2
+    )
+
+    nearest_idx = np.argmin(distances)
+
+    real_centroids.append(X[nearest_idx])
+
+centroids = np.array(real_centroids)
 
     # Assign DC coordinates
     temp_df['dc_lat'] = temp_df['cluster'].apply(
