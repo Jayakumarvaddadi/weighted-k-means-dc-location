@@ -222,96 +222,110 @@ for _, row in centroids_df.iterrows():
     ).add_to(map_india)
 
 map_india.save("index.html")
+
 # ================================
 # SECONDARY LOGISTICS CALCULATION
 # ================================
 
 routes_output = []
 
-# For each DC cluster
+# Sort trucks by capacity
+truck_df = truck_df.sort_values('capacity_cft')
+
+# For each cluster
 for cluster_id in sorted(df['cluster'].unique()):
 
     cluster_stores = df[df['cluster'] == cluster_id].copy()
 
-    # DC location
-    dc_lat = cluster_stores.iloc[0]['dc_lat']
-    dc_long = cluster_stores.iloc[0]['dc_long']
-
-    # Sort stores by distance from DC
+    # Sort stores by distance
     cluster_stores = cluster_stores.sort_values('distance_km')
 
     current_route = []
     current_load = 0
-# Sort trucks by capacity
-truck_df = truck_df.sort_values('capacity_cft')
-
-selected_truck = None
-
-# Find smallest feasible truck
-for _, truck_option in truck_df.iterrows():
-
-    if current_load <= truck_option['capacity_cft']:
-
-        selected_truck = truck_option
-        break
-
-# If no truck large enough, use largest truck
-if selected_truck is None:
-
-    selected_truck = truck_df.iloc[-1]
-
-truck_capacity = selected_truck['capacity_cft']
-fixed_cost = selected_truck['fixed_cost']
-variable_cost = selected_truck['variable_cost_per_km']
 
     for _, store in cluster_stores.iterrows():
 
         demand = store['demand_cft']
 
-        # If adding store exceeds truck capacity
-        if current_load + demand > truck_capacity:
+        # Add store first
+        current_route.append(store)
+        current_load += demand
+
+        # Find smallest feasible truck
+        selected_truck = None
+
+        for _, truck_option in truck_df.iterrows():
+
+            if current_load <= truck_option['capacity_cft']:
+
+                selected_truck = truck_option
+                break
+
+        # If no feasible truck
+        if selected_truck is None:
+
+            selected_truck = truck_df.iloc[-1]
+
+        truck_capacity = selected_truck['capacity_cft']
+
+        # Close route if near capacity
+        if current_load >= 0.9 * truck_capacity:
+
+            fixed_cost = selected_truck['fixed_cost']
+            variable_cost = selected_truck['variable_cost_per_km']
 
             # Approximate route distance
             route_distance = sum(
                 [s['distance_km'] for s in current_route]
             ) * 2
 
-            # Route cost
             route_cost = (
                 fixed_cost +
                 variable_cost * route_distance
             )
 
-           routes_output.append({
+            routes_output.append({
 
-    'cluster': cluster_id,
+                'cluster': cluster_id,
 
-    'truck_type': selected_truck['truck_type'],
+                'truck_type': selected_truck['truck_type'],
 
-    'stores_served': len(current_route),
+                'stores_served': len(current_route),
 
-    # Store list
-    'store_list': ', '.join(
-        [str(s['store']) for s in current_route]
-    ),
+                'store_list': ', '.join(
+                    [str(s['store']) for s in current_route]
+                ),
 
-    'total_load_cft': current_load,
+                'total_load_cft': current_load,
 
-    'route_distance_km': route_distance,
+                'route_distance_km': route_distance,
 
-    'route_cost': route_cost
-})
+                'route_cost': route_cost
+            })
 
-            # Reset route
+            # Reset
             current_route = []
             current_load = 0
 
-        # Add current store
-        current_route.append(store)
-        current_load += demand
-
     # Final remaining route
     if len(current_route) > 0:
+
+        # Select truck again
+        selected_truck = None
+
+        for _, truck_option in truck_df.iterrows():
+
+            if current_load <= truck_option['capacity_cft']:
+
+                selected_truck = truck_option
+                break
+
+        if selected_truck is None:
+
+            selected_truck = truck_df.iloc[-1]
+
+        fixed_cost = selected_truck['fixed_cost']
+        variable_cost = selected_truck['variable_cost_per_km']
 
         route_distance = sum(
             [s['distance_km'] for s in current_route]
@@ -322,27 +336,26 @@ variable_cost = selected_truck['variable_cost_per_km']
             variable_cost * route_distance
         )
 
-       routes_output.append({
+        routes_output.append({
 
-    'cluster': cluster_id,
+            'cluster': cluster_id,
 
-    'truck_type': selected_truck['truck_type'],
+            'truck_type': selected_truck['truck_type'],
 
-    'stores_served': len(current_route),
+            'stores_served': len(current_route),
 
-    # Store list
-    'store_list': ', '.join(
-        [str(s['store']) for s in current_route]
-    ),
+            'store_list': ', '.join(
+                [str(s['store']) for s in current_route]
+            ),
 
-    'total_load_cft': current_load,
+            'total_load_cft': current_load,
 
-    'route_distance_km': route_distance,
+            'route_distance_km': route_distance,
 
-    'route_cost': route_cost
-})
+            'route_cost': route_cost
+        })
 
-# Save route-wise output
+# Save outputs
 
 routes_df = pd.DataFrame(routes_output)
 
@@ -351,18 +364,25 @@ routes_df.to_excel(
     index=False
 )
 
-# Secondary logistics summary
-
 summary_secondary = pd.DataFrame({
+
     'total_routes': [len(routes_df)],
-    'total_secondary_cost': [routes_df['route_cost'].sum()],
-    'average_route_cost': [routes_df['route_cost'].mean()],
-    'total_route_distance': [routes_df['route_distance_km'].sum()]
+
+    'total_secondary_cost': [
+        routes_df['route_cost'].sum()
+    ],
+
+    'average_route_cost': [
+        routes_df['route_cost'].mean()
+    ],
+
+    'total_route_distance': [
+        routes_df['route_distance_km'].sum()
+    ]
 })
 
 summary_secondary.to_excel(
     'secondary_logistics_summary.xlsx',
     index=False
 )
-
 print("Done! Files generated.")
