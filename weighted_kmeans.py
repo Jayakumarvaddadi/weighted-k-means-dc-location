@@ -1,3 +1,4 @@
+from itertools import combinations
 import os
 
 print("FILES IN DIRECTORY:")
@@ -29,6 +30,7 @@ def haversine(lat1, lon1, lat2, lon2):
     return R * c
 # Load data
 df = pd.read_excel('saavu2.xlsx')
+truck_df = pd.read_excel('truck_master.xlsx')
 df.columns = df.columns.str.lower()
 
 # Clean data
@@ -220,5 +222,111 @@ for _, row in centroids_df.iterrows():
     ).add_to(map_india)
 
 map_india.save("index.html")
+# ================================
+# SECONDARY LOGISTICS CALCULATION
+# ================================
+
+routes_output = []
+
+# For each DC cluster
+for cluster_id in sorted(df['cluster'].unique()):
+
+    cluster_stores = df[df['cluster'] == cluster_id].copy()
+
+    # DC location
+    dc_lat = cluster_stores.iloc[0]['dc_lat']
+    dc_long = cluster_stores.iloc[0]['dc_long']
+
+    # Sort stores by distance from DC
+    cluster_stores = cluster_stores.sort_values('distance_km')
+
+    current_route = []
+    current_load = 0
+
+    # Use medium truck for now
+    truck = truck_df.iloc[1]
+
+    truck_capacity = truck['capacity_cft']
+    fixed_cost = truck['fixed_cost']
+    variable_cost = truck['variable_cost_per_km']
+
+    for _, store in cluster_stores.iterrows():
+
+        demand = store['demand_cft']
+
+        # If adding store exceeds truck capacity
+        if current_load + demand > truck_capacity:
+
+            # Approximate route distance
+            route_distance = sum(
+                [s['distance_km'] for s in current_route]
+            ) * 2
+
+            # Route cost
+            route_cost = (
+                fixed_cost +
+                variable_cost * route_distance
+            )
+
+            routes_output.append({
+                'cluster': cluster_id,
+                'truck_type': truck['truck_type'],
+                'stores_served': len(current_route),
+                'total_load_cft': current_load,
+                'route_distance_km': route_distance,
+                'route_cost': route_cost
+            })
+
+            # Reset route
+            current_route = []
+            current_load = 0
+
+        # Add current store
+        current_route.append(store)
+        current_load += demand
+
+    # Final remaining route
+    if len(current_route) > 0:
+
+        route_distance = sum(
+            [s['distance_km'] for s in current_route]
+        ) * 2
+
+        route_cost = (
+            fixed_cost +
+            variable_cost * route_distance
+        )
+
+        routes_output.append({
+            'cluster': cluster_id,
+            'truck_type': truck['truck_type'],
+            'stores_served': len(current_route),
+            'total_load_cft': current_load,
+            'route_distance_km': route_distance,
+            'route_cost': route_cost
+        })
+
+# Save route-wise output
+
+routes_df = pd.DataFrame(routes_output)
+
+routes_df.to_excel(
+    'secondary_logistics_routes.xlsx',
+    index=False
+)
+
+# Secondary logistics summary
+
+summary_secondary = pd.DataFrame({
+    'total_routes': [len(routes_df)],
+    'total_secondary_cost': [routes_df['route_cost'].sum()],
+    'average_route_cost': [routes_df['route_cost'].mean()],
+    'total_route_distance': [routes_df['route_distance_km'].sum()]
+})
+
+summary_secondary.to_excel(
+    'secondary_logistics_summary.xlsx',
+    index=False
+)
 
 print("Done! Files generated.")
