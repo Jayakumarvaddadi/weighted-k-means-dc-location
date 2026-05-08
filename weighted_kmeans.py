@@ -242,13 +242,27 @@ for cluster_id in sorted(df['cluster'].unique()):
 
     current_route = []
     current_load = 0
+# Sort trucks by capacity
+truck_df = truck_df.sort_values('capacity_cft')
 
-    # Use medium truck for now
-    truck = truck_df.iloc[1]
+selected_truck = None
 
-    truck_capacity = truck['capacity_cft']
-    fixed_cost = truck['fixed_cost']
-    variable_cost = truck['variable_cost_per_km']
+# Find smallest feasible truck
+for _, truck_option in truck_df.iterrows():
+
+    if current_load <= truck_option['capacity_cft']:
+
+        selected_truck = truck_option
+        break
+
+# If no truck large enough, use largest truck
+if selected_truck is None:
+
+    selected_truck = truck_df.iloc[-1]
+
+truck_capacity = selected_truck['capacity_cft']
+fixed_cost = selected_truck['fixed_cost']
+variable_cost = selected_truck['variable_cost_per_km']
 
     for _, store in cluster_stores.iterrows():
 
@@ -268,14 +282,25 @@ for cluster_id in sorted(df['cluster'].unique()):
                 variable_cost * route_distance
             )
 
-            routes_output.append({
-                'cluster': cluster_id,
-                'truck_type': truck['truck_type'],
-                'stores_served': len(current_route),
-                'total_load_cft': current_load,
-                'route_distance_km': route_distance,
-                'route_cost': route_cost
-            })
+           routes_output.append({
+
+    'cluster': cluster_id,
+
+    'truck_type': selected_truck['truck_type'],
+
+    'stores_served': len(current_route),
+
+    # Store list
+    'store_list': ', '.join(
+        [str(s['store']) for s in current_route]
+    ),
+
+    'total_load_cft': current_load,
+
+    'route_distance_km': route_distance,
+
+    'route_cost': route_cost
+})
 
             # Reset route
             current_route = []
@@ -297,14 +322,25 @@ for cluster_id in sorted(df['cluster'].unique()):
             variable_cost * route_distance
         )
 
-        routes_output.append({
-            'cluster': cluster_id,
-            'truck_type': truck['truck_type'],
-            'stores_served': len(current_route),
-            'total_load_cft': current_load,
-            'route_distance_km': route_distance,
-            'route_cost': route_cost
-        })
+       routes_output.append({
+
+    'cluster': cluster_id,
+
+    'truck_type': selected_truck['truck_type'],
+
+    'stores_served': len(current_route),
+
+    # Store list
+    'store_list': ', '.join(
+        [str(s['store']) for s in current_route]
+    ),
+
+    'total_load_cft': current_load,
+
+    'route_distance_km': route_distance,
+
+    'route_cost': route_cost
+})
 
 # Save route-wise output
 
