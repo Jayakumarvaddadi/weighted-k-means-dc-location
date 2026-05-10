@@ -28,6 +28,55 @@ def haversine(lat1, lon1, lat2, lon2):
     c = 2 * atan2(sqrt(a), sqrt(1 - a))
 
     return R * c
+    def nearest_neighbor_route(dc_lat, dc_long, stores_df):
+
+    unvisited = stores_df.copy()
+
+    route_sequence = []
+
+    current_lat = dc_lat
+    current_long = dc_long
+
+    total_distance = 0
+
+    while len(unvisited) > 0:
+
+        # Calculate distance from current point
+        unvisited['temp_distance'] = unvisited.apply(
+            lambda row: haversine(
+                current_lat,
+                current_long,
+                row['lat'],
+                row['long']
+            ),
+            axis=1
+        )
+
+        # Select nearest store
+        nearest_store = unvisited.loc[
+            unvisited['temp_distance'].idxmin()
+        ]
+
+        route_sequence.append(nearest_store)
+
+        total_distance += nearest_store['temp_distance']
+
+        # Move truck location
+        current_lat = nearest_store['lat']
+        current_long = nearest_store['long']
+
+        # Remove visited store
+        unvisited = unvisited.drop(nearest_store.name)
+
+    # Return to DC
+    total_distance += haversine(
+        current_lat,
+        current_long,
+        dc_lat,
+        dc_long
+    )
+
+    return route_sequence, total_distance
 # Load data
 df = pd.read_excel('saavu2.xlsx')
 truck_df = pd.read_excel('truck_master.xlsx')
@@ -292,9 +341,9 @@ for cluster_id in sorted(df['cluster'].unique()):
 
                 'stores_served': len(current_route),
 
-                'store_list': ', '.join(
-                    [str(s['store']) for s in current_route]
-                ),
+                'store_list': ' -> '.join(
+                 [str(s['store']) for s in route_sequence]
+                  ),
 
                 'total_load_cft': current_load,
 
@@ -327,9 +376,13 @@ for cluster_id in sorted(df['cluster'].unique()):
         fixed_cost = selected_truck['fixed_cost']
         variable_cost = selected_truck['variable_cost_per_km']
 
-        route_distance = sum(
-            [s['distance_km'] for s in current_route]
-        ) * 2
+      route_df = pd.DataFrame(current_route)
+
+       route_sequence, route_distance = nearest_neighbor_route(
+       dc_lat,
+       dc_long,
+       route_df
+       )
 
         route_cost = (
             fixed_cost +
@@ -344,8 +397,8 @@ for cluster_id in sorted(df['cluster'].unique()):
 
             'stores_served': len(current_route),
 
-            'store_list': ', '.join(
-                [str(s['store']) for s in current_route]
+            'store_list': ' -> '.join(
+             [str(s['store']) for s in route_sequence]
             ),
 
             'total_load_cft': current_load,
