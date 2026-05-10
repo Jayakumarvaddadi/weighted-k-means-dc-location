@@ -28,7 +28,7 @@ def haversine(lat1, lon1, lat2, lon2):
     c = 2 * atan2(sqrt(a), sqrt(1 - a))
 
     return R * c
-    def nearest_neighbor_route(dc_lat, dc_long, stores_df):
+def nearest_neighbor_route(dc_lat, dc_long, stores_df):
 
     unvisited = stores_df.copy()
 
@@ -41,7 +41,7 @@ def haversine(lat1, lon1, lat2, lon2):
 
     while len(unvisited) > 0:
 
-        # Calculate distance from current point
+        # Distance from current location
         unvisited['temp_distance'] = unvisited.apply(
             lambda row: haversine(
                 current_lat,
@@ -52,7 +52,7 @@ def haversine(lat1, lon1, lat2, lon2):
             axis=1
         )
 
-        # Select nearest store
+        # Nearest store
         nearest_store = unvisited.loc[
             unvisited['temp_distance'].idxmin()
         ]
@@ -76,7 +76,8 @@ def haversine(lat1, lon1, lat2, lon2):
         dc_long
     )
 
-    return route_sequence, total_distance
+    return route_sequence, total_distance      
+       
 # Load data
 df = pd.read_excel('saavu2.xlsx')
 truck_df = pd.read_excel('truck_master.xlsx')
