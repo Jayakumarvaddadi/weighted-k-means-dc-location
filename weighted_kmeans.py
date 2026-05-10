@@ -85,7 +85,7 @@ def nearest_neighbor_route(dc_lat, dc_long, stores_df):
     return route_sequence, total_distance
 
 # =====================================
-# LOAD DATA
+# LOAD INPUT FILES
 # =====================================
 
 df = pd.read_excel('saavu2.xlsx')
@@ -94,19 +94,33 @@ truck_df = pd.read_excel('truck_master.xlsx')
 
 df.columns = df.columns.str.lower()
 
+truck_df.columns = truck_df.columns.str.lower()
+
 # =====================================
 # CLEAN DATA
 # =====================================
 
 df = df[(df['lat'] != 0) & (df['long'] != 0)]
 
-df = df.dropna(subset=['lat', 'long', 'sales'])
+df = df.dropna(
+    subset=['lat', 'long', 'sales', 'demand_cft']
+)
 
-df['sales'] = pd.to_numeric(df['sales'], errors='coerce')
+df['sales'] = pd.to_numeric(
+    df['sales'],
+    errors='coerce'
+)
 
 df['sales'] = df['sales'].fillna(1)
 
 df['sales'] = df['sales'].clip(lower=1)
+
+df['demand_cft'] = pd.to_numeric(
+    df['demand_cft'],
+    errors='coerce'
+)
+
+df['demand_cft'] = df['demand_cft'].fillna(1)
 
 # =====================================
 # PREPARE CLUSTERING DATA
@@ -117,7 +131,7 @@ X = df[['lat', 'long']].values
 weights = df['sales'].values
 
 # =====================================
-# AUTOMATIC OPTIMUM K SELECTION
+# AUTOMATIC K SELECTION
 # =====================================
 
 max_allowed_distance = 700
@@ -169,7 +183,7 @@ for k in range(2, 15):
         lambda x: centroids[x][1]
     )
 
-    # Calculate haversine distance
+    # Haversine distance
 
     temp_df['distance_km'] = temp_df.apply(
         lambda row: haversine(
@@ -198,7 +212,7 @@ for k in range(2, 15):
         break
 
 # =====================================
-# FINAL OUTPUTS
+# FINAL CLUSTER OUTPUTS
 # =====================================
 
 df = best_df
@@ -212,13 +226,23 @@ print(f"\nOptimal K Found: {best_k}")
 # =====================================
 
 for file in [
+
     "clustered_output.xlsx",
+
     "dc_locations.xlsx",
+
     "store_dc_distances.xlsx",
+
     "model_summary.xlsx",
+
     "secondary_logistics_routes.xlsx",
+
     "secondary_logistics_summary.xlsx",
+
+    "store_monthly_logistics_cost.xlsx",
+
     "index.html"
+
 ]:
 
     if os.path.exists(file):
@@ -235,19 +259,29 @@ df.to_excel(
 )
 
 # =====================================
-# SAVE DISTANCE OUTPUT
+# SAVE STORE-DC DISTANCES
 # =====================================
 
 distance_output = df[[
+
     'store',
+
     'lat',
+
     'long',
+
     'sales',
+
     'cluster',
+
     'dc_lat',
+
     'dc_long',
+
     'distance_km',
+
     'weighted_distance'
+
 ]]
 
 distance_output.to_excel(
@@ -270,6 +304,7 @@ summary_df = pd.DataFrame({
     'avg_distance_km': [
         df['distance_km'].mean()
     ]
+
 })
 
 summary_df.to_excel(
@@ -351,16 +386,20 @@ for _, row in centroids_df.iterrows():
 map_india.save("index.html")
 
 # =====================================
-# SECONDARY LOGISTICS CALCULATION
+# SECONDARY LOGISTICS
 # =====================================
 
 routes_output = []
+
+store_level_cost_output = []
 
 truck_df = truck_df.sort_values(
     'capacity_cft'
 )
 
-# For each cluster
+# =====================================
+# ROUTE BUILDING
+# =====================================
 
 for cluster_id in sorted(df['cluster'].unique()):
 
@@ -390,7 +429,7 @@ for cluster_id in sorted(df['cluster'].unique()):
 
         selected_truck = None
 
-        # Smallest feasible truck
+        # Select smallest feasible truck
 
         for _, truck_option in truck_df.iterrows():
 
@@ -400,23 +439,31 @@ for cluster_id in sorted(df['cluster'].unique()):
 
                 break
 
+        # Use largest truck if needed
+
         if selected_truck is None:
 
             selected_truck = truck_df.iloc[-1]
 
-        truck_capacity = selected_truck['capacity_cft']
+        truck_capacity = selected_truck[
+            'capacity_cft'
+        ]
 
         # Close route at 90% utilization
 
         if current_load >= 0.9 * truck_capacity:
 
-            fixed_cost = selected_truck['fixed_cost']
+            fixed_cost = selected_truck[
+                'fixed_cost'
+            ]
 
             variable_cost = selected_truck[
                 'variable_cost_per_km'
             ]
 
-            route_df = pd.DataFrame(current_route)
+            route_df = pd.DataFrame(
+                current_route
+            )
 
             route_sequence, route_distance = nearest_neighbor_route(
                 dc_lat,
@@ -424,10 +471,52 @@ for cluster_id in sorted(df['cluster'].unique()):
                 route_df
             )
 
-            route_cost = (
+            # Monthly cost
+            monthly_route_cost = (
+
                 fixed_cost +
-                variable_cost * route_distance
+
+                (
+                    variable_cost *
+                    route_distance *
+                    10
+                )
             )
+
+            # Store-wise allocation
+
+            for s in route_sequence:
+
+                store_share = (
+                    s['demand_cft'] / current_load
+                )
+
+                allocated_cost = (
+                    monthly_route_cost *
+                    store_share
+                )
+
+                store_level_cost_output.append({
+
+                    'cluster': cluster_id,
+
+                    'store': s['store'],
+
+                    'truck_type': selected_truck[
+                        'truck_type'
+                    ],
+
+                    'demand_cft': s['demand_cft'],
+
+                    'store_share_percent':
+                        store_share * 100,
+
+                    'allocated_monthly_logistics_cost':
+                        allocated_cost,
+
+                    'route_distance_km':
+                        route_distance
+                })
 
             routes_output.append({
 
@@ -437,17 +526,24 @@ for cluster_id in sorted(df['cluster'].unique()):
                     'truck_type'
                 ],
 
-                'stores_served': len(current_route),
+                'stores_served': len(
+                    current_route
+                ),
 
                 'store_list': ' -> '.join(
-                    [str(s['store']) for s in route_sequence]
+                    [
+                        str(s['store'])
+                        for s in route_sequence
+                    ]
                 ),
 
                 'total_load_cft': current_load,
 
-                'route_distance_km': route_distance,
+                'route_distance_km':
+                    route_distance,
 
-                'route_cost': route_cost
+                'monthly_route_cost':
+                    monthly_route_cost
             })
 
             current_route = []
@@ -462,7 +558,9 @@ for cluster_id in sorted(df['cluster'].unique()):
 
         for _, truck_option in truck_df.iterrows():
 
-            if current_load <= truck_option['capacity_cft']:
+            if current_load <= truck_option[
+                'capacity_cft'
+            ]:
 
                 selected_truck = truck_option
 
@@ -472,13 +570,17 @@ for cluster_id in sorted(df['cluster'].unique()):
 
             selected_truck = truck_df.iloc[-1]
 
-        fixed_cost = selected_truck['fixed_cost']
+        fixed_cost = selected_truck[
+            'fixed_cost'
+        ]
 
         variable_cost = selected_truck[
             'variable_cost_per_km'
         ]
 
-        route_df = pd.DataFrame(current_route)
+        route_df = pd.DataFrame(
+            current_route
+        )
 
         route_sequence, route_distance = nearest_neighbor_route(
             dc_lat,
@@ -486,10 +588,51 @@ for cluster_id in sorted(df['cluster'].unique()):
             route_df
         )
 
-        route_cost = (
+        monthly_route_cost = (
+
             fixed_cost +
-            variable_cost * route_distance
+
+            (
+                variable_cost *
+                route_distance *
+                10
+            )
         )
+
+        # Store-wise allocation
+
+        for s in route_sequence:
+
+            store_share = (
+                s['demand_cft'] / current_load
+            )
+
+            allocated_cost = (
+                monthly_route_cost *
+                store_share
+            )
+
+            store_level_cost_output.append({
+
+                'cluster': cluster_id,
+
+                'store': s['store'],
+
+                'truck_type': selected_truck[
+                    'truck_type'
+                ],
+
+                'demand_cft': s['demand_cft'],
+
+                'store_share_percent':
+                    store_share * 100,
+
+                'allocated_monthly_logistics_cost':
+                    allocated_cost,
+
+                'route_distance_km':
+                    route_distance
+            })
 
         routes_output.append({
 
@@ -499,17 +642,24 @@ for cluster_id in sorted(df['cluster'].unique()):
                 'truck_type'
             ],
 
-            'stores_served': len(current_route),
+            'stores_served': len(
+                current_route
+            ),
 
             'store_list': ' -> '.join(
-                [str(s['store']) for s in route_sequence]
+                [
+                    str(s['store'])
+                    for s in route_sequence
+                ]
             ),
 
             'total_load_cft': current_load,
 
-            'route_distance_km': route_distance,
+            'route_distance_km':
+                route_distance,
 
-            'route_cost': route_cost
+            'monthly_route_cost':
+                monthly_route_cost
         })
 
 # =====================================
@@ -524,6 +674,19 @@ routes_df.to_excel(
 )
 
 # =====================================
+# SAVE STORE-WISE COST
+# =====================================
+
+store_cost_df = pd.DataFrame(
+    store_level_cost_output
+)
+
+store_cost_df.to_excel(
+    'store_monthly_logistics_cost.xlsx',
+    index=False
+)
+
+# =====================================
 # SAVE SECONDARY SUMMARY
 # =====================================
 
@@ -534,15 +697,21 @@ summary_secondary = pd.DataFrame({
     ],
 
     'total_secondary_cost': [
-        routes_df['route_cost'].sum()
+        routes_df[
+            'monthly_route_cost'
+        ].sum()
     ],
 
     'average_route_cost': [
-        routes_df['route_cost'].mean()
+        routes_df[
+            'monthly_route_cost'
+        ].mean()
     ],
 
     'total_route_distance': [
-        routes_df['route_distance_km'].sum()
+        routes_df[
+            'route_distance_km'
+        ].sum()
     ]
 })
 
@@ -551,4 +720,4 @@ summary_secondary.to_excel(
     index=False
 )
 
-print("Done! Files generated.")
+print("Done! Files generated successfully.")
