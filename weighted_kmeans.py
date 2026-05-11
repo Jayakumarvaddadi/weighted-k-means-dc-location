@@ -42,7 +42,7 @@ def haversine(lat1, lon1, lat2, lon2):
     return R * c
 
 # =====================================================
-# LOAD FILES
+# LOAD INPUT FILES
 # =====================================================
 
 df = pd.read_excel("saavu2.xlsx")
@@ -89,7 +89,7 @@ df["demand_cft"] = pd.to_numeric(
 ).fillna(1)
 
 # =====================================================
-# DELETE OLD FILES
+# DELETE OLD OUTPUT FILES
 # =====================================================
 
 old_files = [
@@ -193,7 +193,7 @@ for k in range(2, 20):
     )
 
     # =================================================
-    # DISTANCES
+    # STORE DISTANCES
     # =================================================
 
     temp_df["distance_km"] = temp_df.apply(
@@ -337,7 +337,7 @@ summary_df.to_excel(
 )
 
 # =====================================================
-# MAP INITIALIZATION
+# INITIALIZE MAP
 # =====================================================
 
 map_india = folium.Map(
@@ -431,7 +431,7 @@ routes_output = []
 
 store_level_cost_output = []
 
-MAX_ROUTE_DISTANCE = 1400
+MAX_ROUTE_DISTANCE = 1500
 
 # =====================================================
 # CLUSTER LOOP
@@ -506,7 +506,6 @@ for cluster_id in sorted(df["cluster"].unique()):
     for _, row in cluster_df.iterrows():
 
         demands.append(
-
             int(row["demand_cft"])
         )
 
@@ -514,16 +513,27 @@ for cluster_id in sorted(df["cluster"].unique()):
     # VEHICLES
     # =================================================
 
-    num_vehicles = len(cluster_df)
+    num_vehicles = len(cluster_df) + 20
 
-    largest_capacity = int(
-        truck_df["capacity_cft"].max()
+    # =================================================
+    # MIXED FLEET
+    # =================================================
+
+    vehicle_capacities = []
+
+    truck_capacities = sorted(
+        truck_df["capacity_cft"].tolist()
     )
 
-    vehicle_capacities = [
+    while len(vehicle_capacities) < num_vehicles:
 
-        largest_capacity
-    ] * num_vehicles
+        for cap in truck_capacities:
+
+            vehicle_capacities.append(int(cap))
+
+            if len(vehicle_capacities) >= num_vehicles:
+
+                break
 
     # =================================================
     # ROUTING MODEL
@@ -627,6 +637,12 @@ for cluster_id in sorted(df["cluster"].unique()):
         "Distance"
     )
 
+    routing.AddVariableMinimizedByFinalizer(
+        distance_dimension.CumulVar(
+            routing.End(0)
+        )
+    )
+
     # =================================================
     # COST MINIMIZATION
     # =================================================
@@ -651,7 +667,7 @@ for cluster_id in sorted(df["cluster"].unique()):
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
     )
 
-    search_parameters.time_limit.seconds = 180
+    search_parameters.time_limit.seconds = 300
 
     # =================================================
     # SOLVE
@@ -661,9 +677,149 @@ for cluster_id in sorted(df["cluster"].unique()):
         search_parameters
     )
 
+    # =================================================
+    # FALLBACK SINGLE STORE ROUTES
+    # =================================================
+
     if solution is None:
 
-        print(f"No feasible solution for cluster {cluster_id}")
+        print(f"Fallback activated for Cluster {cluster_id}")
+
+        for _, store_row in cluster_df.iterrows():
+
+            route_distance = int(
+                store_row["distance_km"] * 2
+            )
+
+            route_load = store_row["demand_cft"]
+
+            feasible_trucks = truck_df[
+                truck_df["capacity_cft"] >= route_load
+            ].copy()
+
+            if len(feasible_trucks) == 0:
+
+                selected_truck = truck_df.sort_values(
+                    "capacity_cft"
+                ).iloc[-1]
+
+            else:
+
+                feasible_trucks["estimated_cost"] = (
+
+                    feasible_trucks["fixed_cost"]
+
+                    +
+
+                    (
+                        feasible_trucks["variable_cost_per_km"]
+
+                        *
+
+                        route_distance
+
+                        *
+
+                        10
+                    )
+                )
+
+                selected_truck = feasible_trucks.sort_values(
+                    "estimated_cost"
+                ).iloc[0]
+
+            monthly_route_cost = (
+
+                selected_truck["fixed_cost"]
+
+                +
+
+                (
+                    selected_truck["variable_cost_per_km"]
+
+                    *
+
+                    route_distance
+
+                    *
+
+                    10
+                )
+            )
+
+            routes_output.append({
+
+                "cluster": cluster_id,
+
+                "truck_type":
+                    selected_truck["truck_type"],
+
+                "stores_served": 1,
+
+                "store_list":
+                    store_row["store"],
+
+                "route_load_cft":
+                    route_load,
+
+                "truck_capacity_cft":
+                    selected_truck["capacity_cft"],
+
+                "truck_utilization_percent":
+
+                    (
+                        route_load
+                        /
+                        selected_truck["capacity_cft"]
+                    ) * 100,
+
+                "route_distance_km":
+                    route_distance,
+
+                "monthly_route_cost":
+                    monthly_route_cost
+            })
+
+            store_level_cost_output.append({
+
+                "cluster": cluster_id,
+
+                "store": store_row["store"],
+
+                "truck_type":
+                    selected_truck["truck_type"],
+
+                "demand_cft":
+                    store_row["demand_cft"],
+
+                "allocated_monthly_logistics_cost":
+                    monthly_route_cost,
+
+                "route_distance_km":
+                    route_distance
+            })
+
+            folium.PolyLine(
+
+                locations=[
+
+                    [dc_lat, dc_long],
+
+                    [
+                        store_row["lat"],
+                        store_row["long"]
+                    ],
+
+                    [dc_lat, dc_long]
+                ],
+
+                color=cluster_colors[cluster_id],
+
+                weight=3,
+
+                opacity=0.8
+
+            ).add_to(map_india)
 
         continue
 
@@ -925,7 +1081,7 @@ for cluster_id in sorted(df["cluster"].unique()):
             })
 
         # =================================================
-        # ROUTE LINES ON MAP
+        # MAP ROUTE LINES
         # =================================================
 
         folium.PolyLine(
@@ -977,7 +1133,7 @@ store_cost_df.to_excel(
 )
 
 # =====================================================
-# SECONDARY SUMMARY
+# SUMMARY
 # =====================================================
 
 summary_secondary = pd.DataFrame({
@@ -1014,7 +1170,7 @@ summary_secondary.to_excel(
 )
 
 # =====================================================
-# SAVE FINAL MAP
+# SAVE MAP
 # =====================================================
 
 map_india.save(
