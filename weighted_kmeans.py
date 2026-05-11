@@ -449,10 +449,21 @@ for cluster_id in sorted(df['cluster'].unique()):
             'capacity_cft'
         ]
 
-        # Close route at 90% utilization
+        # Close route at 90% utilization and 700km route distance
 
-        if current_load >= 0.9 * truck_capacity:
+        route_df = pd.DataFrame(current_route)
 
+    temp_route_sequence, temp_route_distance = nearest_neighbor_route(
+    dc_lat,
+    dc_long,
+    route_df
+    )
+
+    if (
+    current_load >= 0.9 * truck_capacity
+    or
+    temp_route_distance >= max_route_distance
+    ):
             fixed_cost = selected_truck[
                 'fixed_cost'
             ]
