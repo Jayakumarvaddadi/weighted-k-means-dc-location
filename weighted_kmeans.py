@@ -125,7 +125,7 @@ weights = df["sales"].values
 # AUTOMATIC K SELECTION
 # =========================================
 
-MAX_STORE_DISTANCE = 700
+MAX_STORE_DISTANCE = 1400
 
 best_k = None
 best_df = None
