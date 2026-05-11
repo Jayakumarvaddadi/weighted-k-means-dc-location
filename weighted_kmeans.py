@@ -1,26 +1,31 @@
-from itertools import combinations
 import os
+import pandas as pd
+import numpy as np
+from math import radians, sin, cos, sqrt, atan2
+
+from sklearn.cluster import KMeans
+
 from ortools.constraint_solver import pywrapcp
 from ortools.constraint_solver import routing_enums_pb2
+
+import folium
+import matplotlib.pyplot as plt
+import matplotlib.colors as colors
+
+# =========================================
+# PRINT FILES
+# =========================================
 
 print("FILES IN DIRECTORY:")
 print(os.listdir())
 
-import pandas as pd
-import numpy as np
-from sklearn.cluster import KMeans
-import folium
-import matplotlib.cm as cm
-import matplotlib.colors as colors
-from math import radians, sin, cos, sqrt, atan2
-
-# =====================================
-# HAVERSINE DISTANCE FUNCTION
-# =====================================
+# =========================================
+# HAVERSINE FUNCTION
+# =========================================
 
 def haversine(lat1, lon1, lat2, lon2):
 
-    R = 6371  # Earth radius in km
+    R = 6371
 
     dlat = radians(lat2 - lat1)
     dlon = radians(lon2 - lon1)
@@ -36,198 +41,54 @@ def haversine(lat1, lon1, lat2, lon2):
 
     return R * c
 
-# =====================================
-# NEAREST NEIGHBOR ROUTING
-# =====================================
+# =========================================
+# LOAD DATA
+# =========================================
 
-def nearest_neighbor_route(dc_lat, dc_long, stores_df):
+df = pd.read_excel("saavu2.xlsx")
 
-    unvisited = stores_df.copy()
-
-    route_sequence = []
-
-    current_lat = dc_lat
-    current_long = dc_long
-
-    total_distance = 0
-
-    while len(unvisited) > 0:
-
-        unvisited['temp_distance'] = unvisited.apply(
-            lambda row: haversine(
-                current_lat,
-                current_long,
-                row['lat'],
-                row['long']
-            ),
-            axis=1
-        )
-
-        nearest_store = unvisited.loc[
-            unvisited['temp_distance'].idxmin()
-        ]
-
-        route_sequence.append(nearest_store)
-
-        total_distance += nearest_store['temp_distance']
-
-        current_lat = nearest_store['lat']
-        current_long = nearest_store['long']
-
-        unvisited = unvisited.drop(nearest_store.name)
-
-    # Return to DC
-    total_distance += haversine(
-        current_lat,
-        current_long,
-        dc_lat,
-        dc_long
-    )
-
-    return route_sequence, total_distance
-
-# =====================================
-# LOAD INPUT FILES
-# =====================================
-
-df = pd.read_excel('saavu2.xlsx')
-
-truck_df = pd.read_excel('truck_master.xlsx')
+truck_df = pd.read_excel("truck_master.xlsx")
 
 df.columns = df.columns.str.lower()
 
 truck_df.columns = truck_df.columns.str.lower()
 
-# =====================================
+# =========================================
 # CLEAN DATA
-# =====================================
+# =========================================
 
-df = df[(df['lat'] != 0) & (df['long'] != 0)]
+df = df[(df["lat"] != 0) & (df["long"] != 0)]
 
 df = df.dropna(
-    subset=['lat', 'long', 'sales', 'demand_cft']
+    subset=[
+        "lat",
+        "long",
+        "sales",
+        "demand_cft"
+    ]
 )
 
-df['sales'] = pd.to_numeric(
-    df['sales'],
-    errors='coerce'
+df["sales"] = pd.to_numeric(
+    df["sales"],
+    errors="coerce"
 )
 
-df['sales'] = df['sales'].fillna(1)
+df["sales"] = df["sales"].fillna(1)
 
-df['sales'] = df['sales'].clip(lower=1)
+df["sales"] = df["sales"].clip(lower=1)
 
-df['demand_cft'] = pd.to_numeric(
-    df['demand_cft'],
-    errors='coerce'
+df["demand_cft"] = pd.to_numeric(
+    df["demand_cft"],
+    errors="coerce"
 )
 
-df['demand_cft'] = df['demand_cft'].fillna(1)
+df["demand_cft"] = df["demand_cft"].fillna(1)
 
-# =====================================
-# PREPARE CLUSTERING DATA
-# =====================================
-
-X = df[['lat', 'long']].values
-
-weights = df['sales'].values
-
-# =====================================
-# AUTOMATIC K SELECTION
-# =====================================
-
-max_allowed_distance = 700
-
-best_k = None
-best_df = None
-best_centroids = None
-
-for k in range(2, 15):
-
-    kmeans = KMeans(
-        n_clusters=k,
-        random_state=42,
-        n_init=10
-    )
-
-    kmeans.fit(X, sample_weight=weights)
-
-    temp_df = df.copy()
-
-    temp_df['cluster'] = kmeans.labels_
-
-    centroids = kmeans.cluster_centers_
-
-    # Snap centroids to nearest real store
-
-    real_centroids = []
-
-    for center in centroids:
-
-        distances = np.sqrt(
-            (X[:, 0] - center[0]) ** 2 +
-            (X[:, 1] - center[1]) ** 2
-        )
-
-        nearest_idx = np.argmin(distances)
-
-        real_centroids.append(X[nearest_idx])
-
-    centroids = np.array(real_centroids)
-
-    # Assign DC coordinates
-
-    temp_df['dc_lat'] = temp_df['cluster'].apply(
-        lambda x: centroids[x][0]
-    )
-
-    temp_df['dc_long'] = temp_df['cluster'].apply(
-        lambda x: centroids[x][1]
-    )
-
-    # Haversine distance
-
-    temp_df['distance_km'] = temp_df.apply(
-        lambda row: haversine(
-            row['lat'],
-            row['long'],
-            row['dc_lat'],
-            row['dc_long']
-        ),
-        axis=1
-    )
-
-    temp_df['weighted_distance'] = (
-        temp_df['sales'] * temp_df['distance_km']
-    )
-
-    max_distance = temp_df['distance_km'].max()
-
-    print(f"K={k}, Max Distance={max_distance:.2f} km")
-
-    if max_distance <= max_allowed_distance:
-
-        best_k = k
-        best_df = temp_df
-        best_centroids = centroids
-
-        break
-
-# =====================================
-# FINAL CLUSTER OUTPUTS
-# =====================================
-
-df = best_df
-
-centroids = best_centroids
-
-print(f"\nOptimal K Found: {best_k}")
-
-# =====================================
+# =========================================
 # DELETE OLD FILES
-# =====================================
+# =========================================
 
-for file in [
+files_to_delete = [
 
     "clustered_output.xlsx",
 
@@ -244,112 +105,224 @@ for file in [
     "store_monthly_logistics_cost.xlsx",
 
     "index.html"
+]
 
-]:
+for file in files_to_delete:
 
     if os.path.exists(file):
 
         os.remove(file)
 
-# =====================================
+# =========================================
+# PREPARE KMEANS
+# =========================================
+
+X = df[["lat", "long"]].values
+
+weights = df["sales"].values
+
+# =========================================
+# AUTOMATIC K SELECTION
+# =========================================
+
+MAX_STORE_DISTANCE = 700
+
+best_k = None
+best_df = None
+best_centroids = None
+
+for k in range(2, 15):
+
+    kmeans = KMeans(
+        n_clusters=k,
+        random_state=42,
+        n_init=10
+    )
+
+    kmeans.fit(
+        X,
+        sample_weight=weights
+    )
+
+    temp_df = df.copy()
+
+    temp_df["cluster"] = kmeans.labels_
+
+    centroids = kmeans.cluster_centers_
+
+    # =====================================
+    # SNAP TO NEAREST REAL STORE
+    # =====================================
+
+    real_centroids = []
+
+    for center in centroids:
+
+        distances = np.sqrt(
+
+            (X[:, 0] - center[0]) ** 2 +
+
+            (X[:, 1] - center[1]) ** 2
+
+        )
+
+        nearest_idx = np.argmin(distances)
+
+        real_centroids.append(X[nearest_idx])
+
+    centroids = np.array(real_centroids)
+
+    temp_df["dc_lat"] = temp_df["cluster"].apply(
+        lambda x: centroids[x][0]
+    )
+
+    temp_df["dc_long"] = temp_df["cluster"].apply(
+        lambda x: centroids[x][1]
+    )
+
+    # =====================================
+    # STORE DISTANCES
+    # =====================================
+
+    temp_df["distance_km"] = temp_df.apply(
+
+        lambda row: haversine(
+
+            row["lat"],
+            row["long"],
+            row["dc_lat"],
+            row["dc_long"]
+
+        ),
+
+        axis=1
+    )
+
+    temp_df["weighted_distance"] = (
+
+        temp_df["sales"]
+
+        *
+
+        temp_df["distance_km"]
+
+    )
+
+    max_distance = temp_df["distance_km"].max()
+
+    print(f"K={k}, Max Distance={max_distance:.2f} km")
+
+    if max_distance <= MAX_STORE_DISTANCE:
+
+        best_k = k
+        best_df = temp_df
+        best_centroids = centroids
+
+        break
+
+# =========================================
+# FINAL CLUSTER OUTPUT
+# =========================================
+
+df = best_df
+
+centroids = best_centroids
+
+print(f"\nOptimal K Found: {best_k}")
+
+# =========================================
 # SAVE CLUSTER OUTPUT
-# =====================================
+# =========================================
 
 df.to_excel(
-    'clustered_output.xlsx',
+    "clustered_output.xlsx",
     index=False
 )
 
-# =====================================
-# SAVE STORE-DC DISTANCES
-# =====================================
+# =========================================
+# SAVE DISTANCE OUTPUT
+# =========================================
 
 distance_output = df[[
-
-    'store',
-
-    'lat',
-
-    'long',
-
-    'sales',
-
-    'cluster',
-
-    'dc_lat',
-
-    'dc_long',
-
-    'distance_km',
-
-    'weighted_distance'
-
+    "store",
+    "lat",
+    "long",
+    "sales",
+    "cluster",
+    "dc_lat",
+    "dc_long",
+    "distance_km",
+    "weighted_distance"
 ]]
 
 distance_output.to_excel(
-    'store_dc_distances.xlsx',
+    "store_dc_distances.xlsx",
     index=False
 )
 
-# =====================================
-# SAVE MODEL SUMMARY
-# =====================================
+# =========================================
+# MODEL SUMMARY
+# =========================================
 
 summary_df = pd.DataFrame({
 
-    'optimal_k': [best_k],
+    "optimal_k": [best_k],
 
-    'max_distance_km': [
-        df['distance_km'].max()
+    "max_store_distance_km": [
+        df["distance_km"].max()
     ],
 
-    'avg_distance_km': [
-        df['distance_km'].mean()
+    "avg_store_distance_km": [
+        df["distance_km"].mean()
     ]
-
 })
 
 summary_df.to_excel(
-    'model_summary.xlsx',
+    "model_summary.xlsx",
     index=False
 )
 
-# =====================================
-# SAVE DC LOCATIONS
-# =====================================
+# =========================================
+# DC LOCATIONS
+# =========================================
 
 centroids_df = pd.DataFrame(
     centroids,
-    columns=['lat', 'long']
+    columns=["lat", "long"]
 )
 
 centroids_df.to_excel(
-    'dc_locations.xlsx',
+    "dc_locations.xlsx",
     index=False
 )
 
-# =====================================
-# CREATE MAP
-# =====================================
+# =========================================
+# MAP GENERATION
+# =========================================
 
 map_india = folium.Map(
     location=[22.5, 78.9],
     zoom_start=5
 )
 
-k = df['cluster'].nunique()
+k = df["cluster"].nunique()
 
-colormap = cm.get_cmap('viridis', k)
+colormap = plt.colormaps["viridis"]
 
 for _, row in df.iterrows():
 
     color = colors.to_hex(
-        colormap(row['cluster'])
+        colormap(
+            row["cluster"] / max(k - 1, 1)
+        )
     )
 
     folium.CircleMarker(
 
-        location=[row['lat'], row['long']],
+        location=[
+            row["lat"],
+            row["long"]
+        ],
 
         radius=4,
 
@@ -362,9 +335,10 @@ for _, row in df.iterrows():
         popup=(
 
             f"Store: {row['store']}<br>"
+
             f"Cluster: {row['cluster']}<br>"
-            f"Distance: {row['distance_km']:.2f} km<br>"
-            f"Sales: {row['sales']}"
+
+            f"Distance: {row['distance_km']:.2f} km"
 
         )
 
@@ -376,49 +350,52 @@ for _, row in centroids_df.iterrows():
 
     folium.Marker(
 
-        location=[row['lat'], row['long']],
+        location=[
+            row["lat"],
+            row["long"]
+        ],
 
         icon=folium.Icon(
-            color='red',
-            icon='star'
+            color="red",
+            icon="star"
         )
 
     ).add_to(map_india)
 
 map_india.save("index.html")
 
-# =====================================
-# SECONDARY LOGISTICS
-# =====================================
-from ortools.constraint_solver import pywrapcp
-from ortools.constraint_solver import routing_enums_pb2
-
-# =====================================
+# =========================================
 # ORTOOLS SECONDARY LOGISTICS
-# =====================================
+# =========================================
 
 routes_output = []
 
 store_level_cost_output = []
 
-truck_df = truck_df.sort_values(
-    'capacity_cft'
-).reset_index(drop=True)
-
 MAX_ROUTE_DISTANCE = 700
 
-for cluster_id in sorted(df['cluster'].unique()):
+largest_truck = truck_df.sort_values(
+    "capacity_cft"
+).iloc[-1]
+
+# =========================================
+# CLUSTER LOOP
+# =========================================
+
+for cluster_id in sorted(df["cluster"].unique()):
+
+    print(f"\nOptimizing Cluster {cluster_id}")
 
     cluster_df = df[
-        df['cluster'] == cluster_id
+        df["cluster"] == cluster_id
     ].copy().reset_index(drop=True)
 
-    dc_lat = cluster_df.iloc[0]['dc_lat']
-    dc_long = cluster_df.iloc[0]['dc_long']
+    dc_lat = cluster_df.iloc[0]["dc_lat"]
+
+    dc_long = cluster_df.iloc[0]["dc_long"]
 
     # =====================================
     # CREATE LOCATION LIST
-    # DEPOT = NODE 0
     # =====================================
 
     locations = [(dc_lat, dc_long)]
@@ -426,7 +403,10 @@ for cluster_id in sorted(df['cluster'].unique()):
     for _, row in cluster_df.iterrows():
 
         locations.append(
-            (row['lat'], row['long'])
+            (
+                row["lat"],
+                row["long"]
+            )
         )
 
     # =====================================
@@ -437,20 +417,27 @@ for cluster_id in sorted(df['cluster'].unique()):
 
     for from_node in locations:
 
-        row_distance = []
+        row_distances = []
 
         for to_node in locations:
 
             dist = haversine(
+
                 from_node[0],
                 from_node[1],
+
                 to_node[0],
                 to_node[1]
+
             )
 
-            row_distance.append(int(dist))
+            row_distances.append(
+                int(dist)
+            )
 
-        distance_matrix.append(row_distance)
+        distance_matrix.append(
+            row_distances
+        )
 
     # =====================================
     # DEMANDS
@@ -461,44 +448,62 @@ for cluster_id in sorted(df['cluster'].unique()):
     for _, row in cluster_df.iterrows():
 
         demands.append(
-            int(row['demand_cft'])
+            int(row["demand_cft"])
         )
 
     # =====================================
-    # VEHICLE DATA
+    # VEHICLES
     # =====================================
 
-    vehicle_capacities = list(
-        truck_df['capacity_cft'].astype(int)
-    )
+    num_vehicles = 100
 
-    num_vehicles = len(vehicle_capacities)
+    vehicle_capacities = [
 
-    depot = 0
+        int(
+            largest_truck["capacity_cft"]
+        )
+
+    ] * num_vehicles
 
     # =====================================
     # ROUTING MODEL
     # =====================================
 
     manager = pywrapcp.RoutingIndexManager(
+
         len(distance_matrix),
+
         num_vehicles,
-        depot
+
+        0
     )
 
-    routing = pywrapcp.RoutingModel(manager)
+    routing = pywrapcp.RoutingModel(
+        manager
+    )
 
     # =====================================
     # DISTANCE CALLBACK
     # =====================================
 
-    def distance_callback(from_index, to_index):
+    def distance_callback(
+        from_index,
+        to_index
+    ):
 
-        from_node = manager.IndexToNode(from_index)
+        from_node = manager.IndexToNode(
+            from_index
+        )
 
-        to_node = manager.IndexToNode(to_index)
+        to_node = manager.IndexToNode(
+            to_index
+        )
 
-        return distance_matrix[from_node][to_node]
+        return distance_matrix[
+            from_node
+        ][
+            to_node
+        ]
 
     transit_callback_index = routing.RegisterTransitCallback(
         distance_callback
@@ -514,7 +519,9 @@ for cluster_id in sorted(df['cluster'].unique()):
 
     def demand_callback(from_index):
 
-        from_node = manager.IndexToNode(from_index)
+        from_node = manager.IndexToNode(
+            from_index
+        )
 
         return demands[from_node]
 
@@ -522,28 +529,42 @@ for cluster_id in sorted(df['cluster'].unique()):
         demand_callback
     )
 
+    # =====================================
+    # CAPACITY CONSTRAINT
+    # =====================================
+
     routing.AddDimensionWithVehicleCapacity(
+
         demand_callback_index,
+
         0,
+
         vehicle_capacities,
+
         True,
-        'Capacity'
+
+        "Capacity"
     )
 
     # =====================================
-    # MAX ROUTE DISTANCE
+    # DISTANCE CONSTRAINT
     # =====================================
 
     routing.AddDimension(
+
         transit_callback_index,
+
         0,
+
         MAX_ROUTE_DISTANCE,
+
         True,
-        'Distance'
+
+        "Distance"
     )
 
     distance_dimension = routing.GetDimensionOrDie(
-        'Distance'
+        "Distance"
     )
 
     # =====================================
@@ -561,14 +582,18 @@ for cluster_id in sorted(df['cluster'].unique()):
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
 
     search_parameters.first_solution_strategy = (
+
         routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+
     )
 
     search_parameters.local_search_metaheuristic = (
+
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+
     )
 
-    search_parameters.time_limit.seconds = 20
+    search_parameters.time_limit.seconds = 30
 
     # =====================================
     # SOLVE
@@ -578,211 +603,295 @@ for cluster_id in sorted(df['cluster'].unique()):
         search_parameters
     )
 
-    if solution:
+    if solution is None:
 
-        for vehicle_id in range(num_vehicles):
+        print(f"No feasible solution for cluster {cluster_id}")
 
-            index = routing.Start(vehicle_id)
+        continue
 
-            route_distance = 0
+    # =====================================
+    # EXTRACT ROUTES
+    # =====================================
 
-            route_load = 0
+    for vehicle_id in range(num_vehicles):
 
-            route_stores = []
+        index = routing.Start(vehicle_id)
 
-            while not routing.IsEnd(index):
+        route_distance = 0
 
-                node_index = manager.IndexToNode(index)
+        route_load = 0
 
-                if node_index != 0:
+        route_stores = []
 
-                    store_row = cluster_df.iloc[
-                        node_index - 1
-                    ]
+        while not routing.IsEnd(index):
 
-                    route_stores.append(
-                        store_row['store']
-                    )
+            node_index = manager.IndexToNode(index)
 
-                    route_load += store_row[
-                        'demand_cft'
-                    ]
+            if node_index != 0:
 
-                previous_index = index
+                store_row = cluster_df.iloc[
+                    node_index - 1
+                ]
 
-                index = solution.Value(
-                    routing.NextVar(index)
+                route_stores.append(
+                    store_row["store"]
                 )
 
-                route_distance += routing.GetArcCostForVehicle(
-                    previous_index,
-                    index,
-                    vehicle_id
-                )
+                route_load += store_row[
+                    "demand_cft"
+                ]
 
-            # Skip unused routes
+            previous_index = index
 
-            if len(route_stores) == 0:
+            index = solution.Value(
+                routing.NextVar(index)
+            )
 
-                continue
+            route_distance += routing.GetArcCostForVehicle(
 
-            # =====================================
-            # VEHICLE DETAILS
-            # =====================================
+                previous_index,
 
-            truck = truck_df.iloc[
-                min(vehicle_id, len(truck_df)-1)
-            ]
+                index,
 
-            fixed_cost = truck['fixed_cost']
+                vehicle_id
+            )
 
-            variable_cost = truck[
-                'variable_cost_per_km'
-            ]
+        # =================================
+        # SKIP EMPTY ROUTES
+        # =================================
 
-            # Monthly cost
+        if len(route_stores) == 0:
 
-            monthly_route_cost = (
+            continue
 
-                fixed_cost +
+        # =================================
+        # TRUCK OPTIMIZATION
+        # =================================
+
+        feasible_trucks = truck_df[
+            truck_df["capacity_cft"] >= route_load
+        ].copy()
+
+        if len(feasible_trucks) == 0:
+
+            selected_truck = largest_truck
+
+        else:
+
+            feasible_trucks["estimated_cost"] = (
+
+                feasible_trucks["fixed_cost"]
+
+                +
 
                 (
-                    variable_cost *
-                    route_distance *
+                    feasible_trucks["variable_cost_per_km"]
+
+                    *
+
+                    route_distance
+
+                    *
+
                     10
                 )
             )
 
-            utilization = (
+            selected_truck = feasible_trucks.sort_values(
+                "estimated_cost"
+            ).iloc[0]
 
-                route_load /
+        # =================================
+        # COST CALCULATION
+        # =================================
 
-                truck['capacity_cft']
+        fixed_cost = selected_truck[
+            "fixed_cost"
+        ]
 
-            ) * 100
+        variable_cost = selected_truck[
+            "variable_cost_per_km"
+        ]
 
-            # =====================================
-            # ROUTE OUTPUT
-            # =====================================
+        monthly_route_cost = (
 
-            routes_output.append({
+            fixed_cost
 
-                'cluster': cluster_id,
+            +
 
-                'truck_type': truck['truck_type'],
+            (
+                variable_cost
 
-                'stores_served': len(route_stores),
+                *
 
-                'store_list': ' -> '.join(route_stores),
+                route_distance
 
-                'route_load_cft': route_load,
+                *
 
-                'truck_capacity_cft':
-                    truck['capacity_cft'],
+                10
+            )
+        )
 
-                'truck_utilization_percent':
-                    utilization,
+        utilization = (
 
-                'route_distance_km':
-                    route_distance,
+            route_load
 
-                'monthly_route_cost':
-                    monthly_route_cost
+            /
+
+            selected_truck[
+                "capacity_cft"
+            ]
+
+        ) * 100
+
+        # =================================
+        # ROUTE OUTPUT
+        # =================================
+
+        routes_output.append({
+
+            "cluster": cluster_id,
+
+            "truck_type":
+                selected_truck["truck_type"],
+
+            "stores_served":
+                len(route_stores),
+
+            "store_list":
+                " -> ".join(route_stores),
+
+            "route_load_cft":
+                route_load,
+
+            "truck_capacity_cft":
+                selected_truck[
+                    "capacity_cft"
+                ],
+
+            "truck_utilization_percent":
+                utilization,
+
+            "route_distance_km":
+                route_distance,
+
+            "monthly_route_cost":
+                monthly_route_cost
+        })
+
+        # =================================
+        # STORE-WISE COST ALLOCATION
+        # =================================
+
+        for store_name in route_stores:
+
+            store_data = cluster_df[
+                cluster_df["store"] == store_name
+            ].iloc[0]
+
+            share = (
+
+                store_data["demand_cft"]
+
+                /
+
+                route_load
+
+            )
+
+            allocated_cost = (
+
+                monthly_route_cost
+
+                *
+
+                share
+
+            )
+
+            store_level_cost_output.append({
+
+                "cluster": cluster_id,
+
+                "store": store_name,
+
+                "truck_type":
+                    selected_truck["truck_type"],
+
+                "demand_cft":
+                    store_data["demand_cft"],
+
+                "allocated_monthly_logistics_cost":
+                    allocated_cost,
+
+                "route_distance_km":
+                    route_distance
             })
 
-            # =====================================
-            # STORE COST ALLOCATION
-            # =====================================
+# =========================================
+# SAVE ROUTE OUTPUT
+# =========================================
 
-            for store_name in route_stores:
-
-                store_data = cluster_df[
-                    cluster_df['store'] == store_name
-                ].iloc[0]
-
-                share = (
-
-                    store_data['demand_cft'] /
-
-                    route_load
-
-                )
-
-                allocated_cost = (
-
-                    monthly_route_cost *
-
-                    share
-
-                )
-
-                store_level_cost_output.append({
-
-                    'cluster': cluster_id,
-
-                    'store': store_name,
-
-                    'truck_type':
-                        truck['truck_type'],
-
-                    'demand_cft':
-                        store_data['demand_cft'],
-
-                    'allocated_monthly_logistics_cost':
-                        allocated_cost,
-
-                    'route_distance_km':
-                        route_distance
-                })
-
-# =====================================
-# SAVE OUTPUTS
-# =====================================
-
-routes_df = pd.DataFrame(routes_output)
+routes_df = pd.DataFrame(
+    routes_output
+)
 
 routes_df.to_excel(
-    'secondary_logistics_routes.xlsx',
+    "secondary_logistics_routes.xlsx",
     index=False
 )
+
+# =========================================
+# SAVE STORE COST OUTPUT
+# =========================================
 
 store_cost_df = pd.DataFrame(
     store_level_cost_output
 )
 
 store_cost_df.to_excel(
-    'store_monthly_logistics_cost.xlsx',
+    "store_monthly_logistics_cost.xlsx",
     index=False
 )
 
+# =========================================
+# SECONDARY SUMMARY
+# =========================================
+
 summary_secondary = pd.DataFrame({
 
-    'total_routes': [
+    "total_routes": [
         len(routes_df)
     ],
 
-    'total_secondary_cost': [
+    "total_secondary_cost": [
+
         routes_df[
-            'monthly_route_cost'
+            "monthly_route_cost"
         ].sum()
+
     ],
 
-    'average_route_cost': [
+    "average_route_cost": [
+
         routes_df[
-            'monthly_route_cost'
+            "monthly_route_cost"
         ].mean()
+
     ],
 
-    'total_route_distance': [
+    "total_route_distance": [
+
         routes_df[
-            'route_distance_km'
+            "route_distance_km"
         ].sum()
+
     ]
 })
 
 summary_secondary.to_excel(
-    'secondary_logistics_summary.xlsx',
+    "secondary_logistics_summary.xlsx",
     index=False
 )
 
-print('OR-Tools Optimization Completed Successfully')
+print("\nOptimization Completed Successfully")
