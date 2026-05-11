@@ -125,7 +125,7 @@ weights = df["sales"].values
 # AUTOMATIC K SELECTION
 # =========================================
 
-MAX_STORE_DISTANCE = 1400
+MAX_STORE_DISTANCE = 700
 
 best_k = None
 best_df = None
@@ -372,7 +372,7 @@ routes_output = []
 
 store_level_cost_output = []
 
-MAX_ROUTE_DISTANCE = 700
+MAX_ROUTE_DISTANCE = 1400
 
 largest_truck = truck_df.sort_values(
     "capacity_cft"
