@@ -16,8 +16,7 @@ jobs:
         with:
           python-version: '3.10'
 
-      - run: pip install pandas numpy scikit-learn folium matplotlib openpyxl
-
+      - run: pip install pandas numpy scikit-learn folium matplotlib openpyxl ortools
       - run: python weighted_kmeans.py
 
       - run: |
