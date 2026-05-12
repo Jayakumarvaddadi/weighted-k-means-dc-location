@@ -46,7 +46,6 @@ def haversine(lat1, lon1, lat2, lon2):
 # =====================================================
 
 df = pd.read_excel("saavu2.xlsx")
-
 truck_df = pd.read_excel("truck_master.xlsx")
 
 # =====================================================
@@ -54,7 +53,6 @@ truck_df = pd.read_excel("truck_master.xlsx")
 # =====================================================
 
 df.columns = df.columns.str.lower()
-
 truck_df.columns = truck_df.columns.str.lower()
 
 # =====================================================
@@ -89,7 +87,7 @@ df["demand_cft"] = pd.to_numeric(
 ).fillna(1)
 
 # =====================================================
-# DELETE OLD OUTPUT FILES
+# DELETE OLD OUTPUTS
 # =====================================================
 
 old_files = [
@@ -107,6 +105,8 @@ old_files = [
     "secondary_logistics_summary.xlsx",
 
     "store_monthly_logistics_cost.xlsx",
+
+    "fleet_summary.xlsx",
 
     "optimized_routes_map.html"
 ]
@@ -193,7 +193,7 @@ for k in range(2, 20):
     )
 
     # =================================================
-    # STORE DISTANCES
+    # DISTANCE CALCULATION
     # =================================================
 
     temp_df["distance_km"] = temp_df.apply(
@@ -260,17 +260,13 @@ centroids = np.array([
 ])
 
 # =====================================================
-# SAVE CLUSTER OUTPUT
+# SAVE PRIMARY OUTPUTS
 # =====================================================
 
 df.to_excel(
     "clustered_output.xlsx",
     index=False
 )
-
-# =====================================================
-# STORE DISTANCE OUTPUT
-# =====================================================
 
 distance_output = df[[
 
@@ -298,14 +294,8 @@ distance_output.to_excel(
     index=False
 )
 
-# =====================================================
-# DC OUTPUT
-# =====================================================
-
 centroids_df = pd.DataFrame(
-
     centroids,
-
     columns=["lat", "long"]
 )
 
@@ -313,10 +303,6 @@ centroids_df.to_excel(
     "dc_locations.xlsx",
     index=False
 )
-
-# =====================================================
-# MODEL SUMMARY
-# =====================================================
 
 summary_df = pd.DataFrame({
 
@@ -428,13 +414,12 @@ for cluster_id, row in centroids_df.iterrows():
 # =====================================================
 
 routes_output = []
-
 store_level_cost_output = []
 
-MAX_ROUTE_DISTANCE = 1500
+MAX_ROUTE_DISTANCE = 1700
 
 # =====================================================
-# CLUSTER LOOP
+# CLUSTER-WISE ORTOOLS
 # =====================================================
 
 for cluster_id in sorted(df["cluster"].unique()):
@@ -446,22 +431,17 @@ for cluster_id in sorted(df["cluster"].unique()):
     ].copy().reset_index(drop=True)
 
     dc_lat = cluster_df.iloc[0]["dc_lat"]
-
     dc_long = cluster_df.iloc[0]["dc_long"]
 
     # =================================================
     # LOCATIONS
     # =================================================
 
-    locations = [
-
-        (dc_lat, dc_long)
-    ]
+    locations = [(dc_lat, dc_long)]
 
     for _, row in cluster_df.iterrows():
 
         locations.append(
-
             (
                 row["lat"],
                 row["long"]
@@ -510,14 +490,13 @@ for cluster_id in sorted(df["cluster"].unique()):
         )
 
     # =================================================
-    # VEHICLES
+    # VEHICLE SETTINGS
     # =================================================
 
-    num_vehicles = len(cluster_df) + 20
-
-    # =================================================
-    # MIXED FLEET
-    # =================================================
+    num_vehicles = max(
+        5,
+        len(cluster_df) // 6
+    )
 
     vehicle_capacities = []
 
@@ -529,7 +508,9 @@ for cluster_id in sorted(df["cluster"].unique()):
 
         for cap in truck_capacities:
 
-            vehicle_capacities.append(int(cap))
+            vehicle_capacities.append(
+                int(cap)
+            )
 
             if len(vehicle_capacities) >= num_vehicles:
 
@@ -584,6 +565,17 @@ for cluster_id in sorted(df["cluster"].unique()):
     )
 
     # =================================================
+    # PENALIZE EXTRA TRUCKS
+    # =================================================
+
+    for vehicle_id in range(num_vehicles):
+
+        routing.SetFixedCostOfVehicle(
+            50000,
+            vehicle_id
+        )
+
+    # =================================================
     # DEMAND CALLBACK
     # =================================================
 
@@ -617,7 +609,7 @@ for cluster_id in sorted(df["cluster"].unique()):
     )
 
     # =================================================
-    # ROUTE DISTANCE CONSTRAINT
+    # DISTANCE CONSTRAINT
     # =================================================
 
     routing.AddDimension(
@@ -636,16 +628,6 @@ for cluster_id in sorted(df["cluster"].unique()):
     distance_dimension = routing.GetDimensionOrDie(
         "Distance"
     )
-
-    routing.AddVariableMinimizedByFinalizer(
-        distance_dimension.CumulVar(
-            routing.End(0)
-        )
-    )
-
-    # =================================================
-    # COST MINIMIZATION
-    # =================================================
 
     distance_dimension.SetGlobalSpanCostCoefficient(
         1000
@@ -678,7 +660,7 @@ for cluster_id in sorted(df["cluster"].unique()):
     )
 
     # =================================================
-    # FALLBACK SINGLE STORE ROUTES
+    # FALLBACK
     # =================================================
 
     if solution is None:
@@ -715,11 +697,8 @@ for cluster_id in sorted(df["cluster"].unique()):
                         feasible_trucks["variable_cost_per_km"]
 
                         *
-
                         route_distance
-
                         *
-
                         10
                     )
                 )
@@ -727,6 +706,14 @@ for cluster_id in sorted(df["cluster"].unique()):
                 selected_truck = feasible_trucks.sort_values(
                     "estimated_cost"
                 ).iloc[0]
+
+            utilization = (
+
+                route_load
+                /
+                selected_truck["capacity_cft"]
+
+            ) * 100
 
             monthly_route_cost = (
 
@@ -738,11 +725,8 @@ for cluster_id in sorted(df["cluster"].unique()):
                     selected_truck["variable_cost_per_km"]
 
                     *
-
                     route_distance
-
                     *
-
                     10
                 )
             )
@@ -766,12 +750,7 @@ for cluster_id in sorted(df["cluster"].unique()):
                     selected_truck["capacity_cft"],
 
                 "truck_utilization_percent":
-
-                    (
-                        route_load
-                        /
-                        selected_truck["capacity_cft"]
-                    ) * 100,
+                    round(utilization, 2),
 
                 "route_distance_km":
                     route_distance,
@@ -789,42 +768,14 @@ for cluster_id in sorted(df["cluster"].unique()):
                 "truck_type":
                     selected_truck["truck_type"],
 
-                "demand_cft":
-                    store_row["demand_cft"],
-
                 "allocated_monthly_logistics_cost":
-                    monthly_route_cost,
-
-                "route_distance_km":
-                    route_distance
+                    monthly_route_cost
             })
-
-            folium.PolyLine(
-
-                locations=[
-
-                    [dc_lat, dc_long],
-
-                    [
-                        store_row["lat"],
-                        store_row["long"]
-                    ],
-
-                    [dc_lat, dc_long]
-                ],
-
-                color=cluster_colors[cluster_id],
-
-                weight=3,
-
-                opacity=0.8
-
-            ).add_to(map_india)
 
         continue
 
     # =================================================
-    # ROUTES
+    # EXTRACT ROUTES
     # =================================================
 
     for vehicle_id in range(num_vehicles):
@@ -832,7 +783,6 @@ for cluster_id in sorted(df["cluster"].unique()):
         index = routing.Start(vehicle_id)
 
         route_distance = 0
-
         route_load = 0
 
         route_stores = []
@@ -882,28 +832,21 @@ for cluster_id in sorted(df["cluster"].unique()):
                 vehicle_id
             )
 
-        # =================================================
-        # SKIP EMPTY ROUTES
-        # =================================================
-
         if len(route_stores) == 0:
 
             continue
 
         route_coordinates.append([
-
             dc_lat,
             dc_long
         ])
 
         # =================================================
-        # SELECT BEST TRUCK
+        # BEST TRUCK SELECTION
         # =================================================
 
         feasible_trucks = truck_df[
-
             truck_df["capacity_cft"] >= route_load
-
         ].copy()
 
         if len(feasible_trucks) == 0:
@@ -917,9 +860,7 @@ for cluster_id in sorted(df["cluster"].unique()):
             feasible_trucks["utilization"] = (
 
                 route_load
-
                 /
-
                 feasible_trucks["capacity_cft"]
 
             )
@@ -934,11 +875,8 @@ for cluster_id in sorted(df["cluster"].unique()):
                     feasible_trucks["variable_cost_per_km"]
 
                     *
-
                     route_distance
-
                     *
-
                     10
                 )
             )
@@ -948,7 +886,6 @@ for cluster_id in sorted(df["cluster"].unique()):
                 feasible_trucks["estimated_cost"]
 
                 /
-
                 feasible_trucks["utilization"]
 
             )
@@ -957,46 +894,29 @@ for cluster_id in sorted(df["cluster"].unique()):
                 "score"
             ).iloc[0]
 
-        # =================================================
-        # COST CALCULATION
-        # =================================================
+        utilization = (
 
-        fixed_cost = selected_truck[
-            "fixed_cost"
-        ]
+            route_load
+            /
+            selected_truck["capacity_cft"]
 
-        variable_cost = selected_truck[
-            "variable_cost_per_km"
-        ]
+        ) * 100
 
         monthly_route_cost = (
 
-            fixed_cost
+            selected_truck["fixed_cost"]
 
             +
 
             (
-                variable_cost
+                selected_truck["variable_cost_per_km"]
 
                 *
-
                 route_distance
-
                 *
-
                 10
             )
         )
-
-        utilization = (
-
-            route_load
-
-            /
-
-            selected_truck["capacity_cft"]
-
-        ) * 100
 
         # =================================================
         # ROUTE OUTPUT
@@ -1022,7 +942,7 @@ for cluster_id in sorted(df["cluster"].unique()):
                 selected_truck["capacity_cft"],
 
             "truck_utilization_percent":
-                utilization,
+                round(utilization, 2),
 
             "route_distance_km":
                 route_distance,
@@ -1046,19 +966,13 @@ for cluster_id in sorted(df["cluster"].unique()):
                 store_data["demand_cft"]
 
                 /
-
                 route_load
-
             )
 
             allocated_cost = (
-
                 monthly_route_cost
-
                 *
-
                 share
-
             )
 
             store_level_cost_output.append({
@@ -1070,18 +984,12 @@ for cluster_id in sorted(df["cluster"].unique()):
                 "truck_type":
                     selected_truck["truck_type"],
 
-                "demand_cft":
-                    store_data["demand_cft"],
-
                 "allocated_monthly_logistics_cost":
-                    allocated_cost,
-
-                "route_distance_km":
-                    route_distance
+                    allocated_cost
             })
 
         # =================================================
-        # MAP ROUTE LINES
+        # MAP ROUTES
         # =================================================
 
         folium.PolyLine(
@@ -1092,22 +1000,12 @@ for cluster_id in sorted(df["cluster"].unique()):
 
             weight=3,
 
-            opacity=0.8,
-
-            popup=(
-
-                f"Cluster: {cluster_id}<br>"
-
-                f"Truck: {selected_truck['truck_type']}<br>"
-
-                f"Route Distance: {route_distance:.2f} km"
-
-            )
+            opacity=0.8
 
         ).add_to(map_india)
 
 # =====================================================
-# SAVE ROUTE OUTPUT
+# SAVE ROUTE OUTPUTS
 # =====================================================
 
 routes_df = pd.DataFrame(
@@ -1119,10 +1017,6 @@ routes_df.to_excel(
     index=False
 )
 
-# =====================================================
-# SAVE STORE COST OUTPUT
-# =====================================================
-
 store_cost_df = pd.DataFrame(
     store_level_cost_output
 )
@@ -1133,7 +1027,46 @@ store_cost_df.to_excel(
 )
 
 # =====================================================
-# SUMMARY
+# FLEET SUMMARY
+# =====================================================
+
+fleet_summary = routes_df.groupby(
+    "truck_type"
+).agg({
+
+    "truck_type": "count",
+
+    "monthly_route_cost": "sum",
+
+    "route_distance_km": "sum",
+
+    "route_load_cft": "sum",
+
+    "truck_utilization_percent": "mean"
+})
+
+fleet_summary.columns = [
+
+    "number_of_trucks_used",
+
+    "total_monthly_cost",
+
+    "total_route_distance_km",
+
+    "total_load_cft",
+
+    "average_utilization_percent"
+]
+
+fleet_summary = fleet_summary.reset_index()
+
+fleet_summary.to_excel(
+    "fleet_summary.xlsx",
+    index=False
+)
+
+# =====================================================
+# SECONDARY SUMMARY
 # =====================================================
 
 summary_secondary = pd.DataFrame({
@@ -1154,13 +1087,6 @@ summary_secondary = pd.DataFrame({
         routes_df[
             "monthly_route_cost"
         ].mean()
-    ],
-
-    "total_route_distance_km": [
-
-        routes_df[
-            "route_distance_km"
-        ].sum()
     ]
 })
 
