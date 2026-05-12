@@ -489,33 +489,38 @@ for cluster_id in sorted(df["cluster"].unique()):
             int(row["demand_cft"])
         )
 
-    # =================================================
-    # VEHICLE SETTINGS
-    # =================================================
+   # =================================================
+   # HETEROGENEOUS FLEET
+# =================================================
 
-    num_vehicles = max(
-        5,
-        len(cluster_df) // 6
-    )
+vehicle_capacities = []
+vehicle_fixed_costs = []
+vehicle_variable_costs = []
+vehicle_names = []
 
-    vehicle_capacities = []
+# Create multiple copies of each truck type
 
-    truck_capacities = sorted(
-        truck_df["capacity_cft"].tolist()
-    )
+for _, truck in truck_df.iterrows():
 
-    while len(vehicle_capacities) < num_vehicles:
+    for i in range(15):
 
-        for cap in truck_capacities:
+        vehicle_capacities.append(
+            int(truck["capacity_cft"])
+        )
 
-            vehicle_capacities.append(
-                int(cap)
-            )
+        vehicle_fixed_costs.append(
+            float(truck["fixed_cost"])
+        )
 
-            if len(vehicle_capacities) >= num_vehicles:
+        vehicle_variable_costs.append(
+            float(truck["variable_cost_per_km"])
+        )
 
-                break
+        vehicle_names.append(
+            truck["truck_type"]
+        )
 
+num_vehicles = len(vehicle_capacities)
     # =================================================
     # ROUTING MODEL
     # =================================================
@@ -560,10 +565,64 @@ for cluster_id in sorted(df["cluster"].unique()):
         distance_callback
     )
 
-    routing.SetArcCostEvaluatorOfAllVehicles(
-        transit_callback_index
+    # =================================================
+# VEHICLE-SPECIFIC COSTS
+# =================================================
+
+cost_callback_indices = []
+
+for vehicle_id in range(num_vehicles):
+
+    variable_cost = vehicle_variable_costs[
+        vehicle_id
+    ]
+
+    def vehicle_cost_callback(
+        from_index,
+        to_index,
+        vc=variable_cost
+    ):
+
+        from_node = manager.IndexToNode(
+            from_index
+        )
+
+        to_node = manager.IndexToNode(
+            to_index
+        )
+
+        distance = distance_matrix[
+            from_node
+        ][
+            to_node
+        ]
+
+        return int(distance * vc)
+
+    callback_index = routing.RegisterTransitCallback(
+        vehicle_cost_callback
     )
 
+    cost_callback_indices.append(
+        callback_index
+    )
+
+    routing.SetArcCostEvaluatorOfVehicle(
+        callback_index,
+        vehicle_id
+    )
+    # =================================================
+# FIXED VEHICLE COSTS
+# =================================================
+
+   for vehicle_id in range(num_vehicles):
+
+     routing.SetFixedCostOfVehicle(
+
+        int(vehicle_fixed_costs[vehicle_id]),
+
+        vehicle_id
+    )
     # =================================================
     # PENALIZE EXTRA TRUCKS
     # =================================================
