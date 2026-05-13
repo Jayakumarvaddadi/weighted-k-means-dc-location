@@ -89,7 +89,7 @@ locations = []
 demands = []
 store_names = []
 
-# DC NODE
+# DEPOT NODE
 
 locations.append(
     (DC_LAT, DC_LON)
@@ -149,18 +149,39 @@ for i in range(num_nodes):
     distance_matrix.append(row_distances)
 
 # =====================================================
-# VEHICLE CONFIGURATION
+# HETEROGENEOUS FLEET
 # =====================================================
 
-largest_capacity = int(
-    truck_df["capacity_cft"].max()
-)
+vehicle_capacities = []
+vehicle_fixed_costs = []
+vehicle_variable_costs = []
+vehicle_names = []
 
-vehicle_count = len(dc2_df)
+# CREATE MULTIPLE VEHICLES OF EACH TYPE
 
-vehicle_capacities = [
-    largest_capacity
-] * vehicle_count
+for _, row in truck_df.iterrows():
+
+    for i in range(10):
+
+        vehicle_capacities.append(
+            int(round(row["capacity_cft"]))
+        )
+
+        vehicle_fixed_costs.append(
+            int(round(row["fixed_cost"]))
+        )
+
+        vehicle_variable_costs.append(
+            float(row["variable_cost_per_km"])
+        )
+
+        vehicle_names.append(
+            str(row["truck_type"])
+        )
+
+vehicle_count = len(vehicle_capacities)
+
+print("\nTOTAL VEHICLES:", vehicle_count)
 
 # =====================================================
 # DATA MODEL
@@ -187,29 +208,46 @@ manager = pywrapcp.RoutingIndexManager(
 routing = pywrapcp.RoutingModel(manager)
 
 # =====================================================
-# DISTANCE CALLBACK
+# VEHICLE-SPECIFIC COST CALLBACKS
 # =====================================================
 
-def distance_callback(from_index, to_index):
+transit_callback_indices = []
 
-    from_node = manager.IndexToNode(from_index)
-    to_node = manager.IndexToNode(to_index)
+for vehicle_id in range(vehicle_count):
 
-    return int(
-        data["distance_matrix"][
+    variable_cost = vehicle_variable_costs[vehicle_id]
+
+    def vehicle_distance_callback(
+        from_index,
+        to_index,
+        variable_cost=variable_cost
+    ):
+
+        from_node = manager.IndexToNode(from_index)
+        to_node = manager.IndexToNode(to_index)
+
+        distance = data["distance_matrix"][
             from_node
         ][to_node]
+
+        return int(
+            distance * variable_cost
+        )
+
+    callback_index = (
+        routing.RegisterTransitCallback(
+            vehicle_distance_callback
+        )
     )
 
-transit_callback_index = (
-    routing.RegisterTransitCallback(
-        distance_callback
+    transit_callback_indices.append(
+        callback_index
     )
-)
 
-routing.SetArcCostEvaluatorOfAllVehicles(
-    transit_callback_index
-)
+    routing.SetArcCostEvaluatorOfVehicle(
+        callback_index,
+        vehicle_id
+    )
 
 # =====================================================
 # DEMAND CALLBACK
@@ -246,21 +284,21 @@ routing.AddDimensionWithVehicleCapacity(
 # =====================================================
 
 routing.AddDimension(
-    transit_callback_index,
+    transit_callback_indices[0],
     0,
-    MAX_ROUTE_DISTANCE,
+    int(MAX_ROUTE_DISTANCE),
     True,
     "Distance"
 )
 
 # =====================================================
-# MINIMIZE NUMBER OF VEHICLES
+# FIXED COSTS
 # =====================================================
 
 for vehicle_id in range(vehicle_count):
 
     routing.SetFixedCostOfVehicle(
-        100000,
+        int(vehicle_fixed_costs[vehicle_id]),
         vehicle_id
     )
 
@@ -280,7 +318,7 @@ search_parameters.local_search_metaheuristic = (
     routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
 )
 
-search_parameters.time_limit.seconds = 60
+search_parameters.time_limit.seconds = 90
 
 # =====================================================
 # SOLVE
@@ -292,70 +330,11 @@ solution = routing.SolveWithParameters(
 
 if solution:
 
-    print("\nSolution Found")
+    print("\nHFVRP Solution Found")
 
 else:
 
     print("\nNo Solution Found")
-
-# =====================================================
-# ACTUAL DISTANCE FUNCTION
-# =====================================================
-
-def calculate_actual_route_distance(route_nodes):
-
-    if len(route_nodes) == 0:
-        return 0
-
-    total_distance = 0
-
-    first_store = route_nodes[0]
-
-    first_row = dc2_df[
-        dc2_df[STORE_COL] == first_store
-    ].iloc[0]
-
-    total_distance += haversine(
-        DC_LAT,
-        DC_LON,
-        float(first_row[LAT_COL]),
-        float(first_row[LON_COL])
-    )
-
-    for i in range(len(route_nodes) - 1):
-
-        current_store = route_nodes[i]
-        next_store = route_nodes[i + 1]
-
-        current_row = dc2_df[
-            dc2_df[STORE_COL] == current_store
-        ].iloc[0]
-
-        next_row = dc2_df[
-            dc2_df[STORE_COL] == next_store
-        ].iloc[0]
-
-        total_distance += haversine(
-            float(current_row[LAT_COL]),
-            float(current_row[LON_COL]),
-            float(next_row[LAT_COL]),
-            float(next_row[LON_COL])
-        )
-
-    last_store = route_nodes[-1]
-
-    last_row = dc2_df[
-        dc2_df[STORE_COL] == last_store
-    ].iloc[0]
-
-    total_distance += haversine(
-        float(last_row[LAT_COL]),
-        float(last_row[LON_COL]),
-        DC_LAT,
-        DC_LON
-    )
-
-    return total_distance
 
 # =====================================================
 # EXTRACT ROUTES
@@ -372,6 +351,7 @@ if solution:
         index = routing.Start(vehicle_id)
 
         route_load = 0
+        route_distance = 0
 
         route_nodes = []
 
@@ -379,65 +359,46 @@ if solution:
 
             node = manager.IndexToNode(index)
 
+            previous_index = index
+
+            index = solution.Value(
+                routing.NextVar(index)
+            )
+
+            next_node = manager.IndexToNode(index)
+
+            route_distance += distance_matrix[
+                node
+            ][next_node]
+
             if node != 0:
 
                 route_nodes.append(
                     store_names[node]
                 )
 
-                route_load += int(
-                    data["demands"][node]
-                )
-
-            index = solution.Value(
-                routing.NextVar(index)
-            )
+                route_load += demands[node]
 
         if len(route_nodes) == 0:
             continue
 
-        route_distance = (
-            calculate_actual_route_distance(
-                route_nodes
-            )
-        )
-
-        feasible_trucks = truck_df[
-            truck_df["capacity_cft"]
-            >= route_load
-        ].copy()
-
-        feasible_trucks["monthly_cost"] = (
-
-            feasible_trucks["fixed_cost"]
-
-            +
-
-            feasible_trucks[
-                "variable_cost_per_km"
-            ] * route_distance
-
-        ) * MONTHLY_MULTIPLIER
-
-        feasible_trucks = feasible_trucks.sort_values(
-            by="monthly_cost"
-        )
-
-        selected_truck = feasible_trucks.iloc[0]
-
-        truck_capacity = int(
-            selected_truck["capacity_cft"]
-        )
+        truck_capacity = vehicle_capacities[
+            vehicle_id
+        ]
 
         utilization = (
             route_load / truck_capacity
         ) * 100
 
         monthly_cost = (
-            selected_truck["fixed_cost"]
+
+            vehicle_fixed_costs[vehicle_id]
+
             +
-            selected_truck["variable_cost_per_km"]
-            * route_distance
+
+            route_distance
+            * vehicle_variable_costs[vehicle_id]
+
         ) * MONTHLY_MULTIPLIER
 
         routes.append({
@@ -448,6 +409,12 @@ if solution:
             "dc":
                 TARGET_DC,
 
+            "truck_selected":
+                vehicle_names[vehicle_id],
+
+            "truck_capacity_cft":
+                truck_capacity,
+
             "stores_served":
                 " -> ".join(route_nodes),
 
@@ -456,12 +423,6 @@ if solution:
 
             "total_demand_cft":
                 round(route_load, 2),
-
-            "truck_selected":
-                selected_truck["truck_type"],
-
-            "truck_capacity_cft":
-                truck_capacity,
 
             "truck_utilization_percent":
                 round(utilization, 2),
@@ -481,10 +442,47 @@ if solution:
 
 routes_df = pd.DataFrame(routes)
 
+routes_df = routes_df.sort_values(
+    by="monthly_cost"
+)
+
 routes_df.to_excel(
-    "dc2_milk_run_routes.xlsx",
+    "dc2_hfvrp_routes.xlsx",
     index=False
 )
 
+# =====================================================
+# FINAL SUMMARY
+# =====================================================
+
+print("\n================================")
+print("DC2 HFVRP OPTIMIZATION")
+print("================================")
+
+print(
+    "\nTotal Routes:",
+    len(routes_df)
+)
+
+if len(routes_df) > 0:
+
+    print(
+        "\nTotal Monthly Cost:",
+        round(
+            routes_df["monthly_cost"].sum(),
+            2
+        )
+    )
+
+    print(
+        "\nAverage Utilization:",
+        round(
+            routes_df[
+                "truck_utilization_percent"
+            ].mean(),
+            2
+        )
+    )
+
 print("\nGenerated File:")
-print("dc2_milk_run_routes.xlsx")
+print("dc2_hfvrp_routes.xlsx")
