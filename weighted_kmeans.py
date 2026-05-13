@@ -35,7 +35,10 @@ K = 6
 
 TARGET_DC = "DC_1"
 
+# Total route distance constraint
+# (DC -> stores -> DC)
 MAX_ROUTE_DISTANCE = 1400
+
 MONTHLY_MULTIPLIER = 10
 
 # =====================================================
@@ -98,7 +101,7 @@ kmeans.fit(
 df["cluster"] = kmeans.labels_
 
 # =====================================================
-# FORCE DCS TO REAL STORE LOCATIONS
+# FORCE DCs TO REAL STORE LOCATIONS
 # =====================================================
 
 raw_dc_locations = pd.DataFrame(
@@ -110,16 +113,16 @@ real_dc_locations = []
 
 for idx, dc in raw_dc_locations.iterrows():
 
-    min_distance = 999999
+    min_distance = 999999999
     nearest_store = None
 
     for _, store in df.iterrows():
 
         distance = haversine(
-            dc["dc_lat"],
-            dc["dc_long"],
-            store[LAT_COL],
-            store[LON_COL]
+            float(dc["dc_lat"]),
+            float(dc["dc_long"]),
+            float(store[LAT_COL]),
+            float(store[LON_COL])
         )
 
         if distance < min_distance:
@@ -130,10 +133,10 @@ for idx, dc in raw_dc_locations.iterrows():
     real_dc_locations.append({
 
         "dc_lat":
-            nearest_store[LAT_COL],
+            float(nearest_store[LAT_COL]),
 
         "dc_long":
-            nearest_store[LON_COL]
+            float(nearest_store[LON_COL])
     })
 
 dc_locations = pd.DataFrame(
@@ -166,19 +169,19 @@ store_dc_distances = []
 
 for idx, row in df.iterrows():
 
-    cluster_id = row["cluster"]
+    cluster_id = int(row["cluster"])
 
-    dc_lat = dc_locations.iloc[
-        cluster_id
-    ]["dc_lat"]
+    dc_lat = float(
+        dc_locations.iloc[cluster_id]["dc_lat"]
+    )
 
-    dc_lon = dc_locations.iloc[
-        cluster_id
-    ]["dc_long"]
+    dc_lon = float(
+        dc_locations.iloc[cluster_id]["dc_long"]
+    )
 
     distance = haversine(
-        row[LAT_COL],
-        row[LON_COL],
+        float(row[LAT_COL]),
+        float(row[LON_COL]),
         dc_lat,
         dc_lon
     )
@@ -249,8 +252,8 @@ for idx, row in df.iterrows():
 
     folium.CircleMarker(
         location=[
-            row[LAT_COL],
-            row[LON_COL]
+            float(row[LAT_COL]),
+            float(row[LON_COL])
         ],
         radius=4,
         color=color,
@@ -275,8 +278,8 @@ for idx, row in dc_locations.iterrows():
 
     folium.Marker(
         location=[
-            row["dc_lat"],
-            row["dc_long"]
+            float(row["dc_lat"]),
+            float(row["dc_long"])
         ],
         popup=row["dc_id"],
         icon=folium.Icon(
@@ -290,7 +293,6 @@ m.save("index.html")
 # =====================================================
 # PHASE 2
 # TRUE MILK RUN OPTIMIZATION
-# USING OR-TOOLS
 # =====================================================
 
 dc1_df = df[
@@ -305,8 +307,8 @@ selected_dc = dc_locations[
     dc_locations["dc_id"] == TARGET_DC
 ].iloc[0]
 
-DC_LAT = selected_dc["dc_lat"]
-DC_LON = selected_dc["dc_long"]
+DC_LAT = float(selected_dc["dc_lat"])
+DC_LON = float(selected_dc["dc_long"])
 
 # =====================================================
 # CREATE NODES
@@ -316,7 +318,7 @@ locations = []
 demands = []
 store_names = []
 
-# DC NODE
+# DC node
 locations.append(
     (DC_LAT, DC_LON)
 )
@@ -325,63 +327,66 @@ demands.append(0)
 
 store_names.append(TARGET_DC)
 
-# STORE NODES
+# Store nodes
 for _, row in dc1_df.iterrows():
 
     locations.append(
         (
-            row[LAT_COL],
-            row[LON_COL]
+            float(row[LAT_COL]),
+            float(row[LON_COL])
         )
     )
 
     demands.append(
-        int(row[DEMAND_COL])
+        int(round(row[DEMAND_COL]))
     )
 
     store_names.append(
-        row[STORE_COL]
+        str(row[STORE_COL])
     )
 
 # =====================================================
 # DISTANCE MATRIX
-# STORE TO STORE DISTANCES
 # =====================================================
 
 num_nodes = len(locations)
 
-distance_matrix = np.zeros(
-    (num_nodes, num_nodes)
-)
+distance_matrix = []
 
 for i in range(num_nodes):
 
+    row_distances = []
+
     for j in range(num_nodes):
 
-        distance_matrix[i][j] = int(
+        dist = int(round(
 
             haversine(
 
-                locations[i][0],
-                locations[i][1],
+                float(locations[i][0]),
+                float(locations[i][1]),
 
-                locations[j][0],
-                locations[j][1]
+                float(locations[j][0]),
+                float(locations[j][1])
             )
-        )
+        ))
+
+        row_distances.append(dist)
+
+    distance_matrix.append(row_distances)
 
 # =====================================================
 # VEHICLE CONFIGURATION
 # =====================================================
 
-largest_capacity = truck_df[
-    "capacity_cft"
-].max()
+largest_capacity = int(round(
+    truck_df["capacity_cft"].max()
+))
 
-vehicle_count = len(dc1_df)
+vehicle_count = int(len(dc1_df))
 
 vehicle_capacities = [
-    int(largest_capacity)
+    largest_capacity
 ] * vehicle_count
 
 # =====================================================
@@ -390,9 +395,7 @@ vehicle_capacities = [
 
 data = {}
 
-data["distance_matrix"] = (
-    distance_matrix.tolist()
-)
+data["distance_matrix"] = distance_matrix
 
 data["demands"] = demands
 
@@ -435,9 +438,11 @@ def distance_callback(
         to_index
     )
 
-    return data["distance_matrix"][
-        from_node
-    ][to_node]
+    return int(
+        data["distance_matrix"][
+            from_node
+        ][to_node]
+    )
 
 transit_callback_index = (
     routing.RegisterTransitCallback(
@@ -459,7 +464,9 @@ def demand_callback(from_index):
         from_index
     )
 
-    return data["demands"][from_node]
+    return int(
+        data["demands"][from_node]
+    )
 
 demand_callback_index = (
     routing.RegisterUnaryTransitCallback(
@@ -474,7 +481,7 @@ demand_callback_index = (
 routing.AddDimensionWithVehicleCapacity(
     demand_callback_index,
     0,
-    data["vehicle_capacities"],
+    vehicle_capacities,
     True,
     "Capacity"
 )
@@ -486,7 +493,7 @@ routing.AddDimensionWithVehicleCapacity(
 routing.AddDimension(
     transit_callback_index,
     0,
-    MAX_ROUTE_DISTANCE,
+    int(MAX_ROUTE_DISTANCE),
     True,
     "Distance"
 )
@@ -557,7 +564,7 @@ if solution:
                     store_names[node]
                 )
 
-                route_load += (
+                route_load += int(
                     data["demands"][node]
                 )
 
@@ -567,13 +574,13 @@ if solution:
                 routing.NextVar(index)
             )
 
-            route_distance += (
-                routing.GetArcCostForVehicle(
-                    previous_index,
-                    index,
-                    vehicle_id
-                )
+            arc_cost = routing.GetArcCostForVehicle(
+                int(previous_index),
+                int(index),
+                int(vehicle_id)
             )
+
+            route_distance += int(arc_cost)
 
         if len(route_nodes) == 0:
             continue
@@ -587,19 +594,21 @@ if solution:
             >= route_load
         ].copy()
 
-        selected_truck = (
-            feasible_trucks.iloc[0]
+        feasible_trucks = feasible_trucks.sort_values(
+            by="capacity_cft"
         )
 
-        truck_capacity = (
+        selected_truck = feasible_trucks.iloc[0]
+
+        truck_capacity = int(round(
             selected_truck["capacity_cft"]
-        )
+        ))
 
-        fixed_cost = (
+        fixed_cost = float(
             selected_truck["fixed_cost"]
         )
 
-        variable_cost = (
+        variable_cost = float(
             selected_truck[
                 "variable_cost_per_km"
             ]
@@ -673,15 +682,21 @@ print(
     f"{len(routes_df)}"
 )
 
-print(
-    f"\nTotal Monthly Cost = "
-    f"{routes_df['monthly_cost'].sum():,.2f}"
-)
+if len(routes_df) > 0:
 
-print(
-    f"\nAverage Utilization = "
-    f"{routes_df['truck_utilization_percent'].mean():.2f}%"
-)
+    print(
+        f"\nTotal Monthly Cost = "
+        f"{routes_df['monthly_cost'].sum():,.2f}"
+    )
+
+    print(
+        f"\nAverage Utilization = "
+        f"{routes_df['truck_utilization_percent'].mean():.2f}%"
+    )
+
+else:
+
+    print("\nNo feasible routes found.")
 
 print("\nGenerated Files:")
 
