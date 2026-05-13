@@ -154,7 +154,7 @@ for idx, row in dc_locations.iterrows():
 # SAVE MAP
 # =========================
 
-m.save("dc_network_map.html")
+m.save("index.html")
 
 # =========================
 # PRINT SUMMARY
@@ -169,4 +169,4 @@ print(df["assigned_dc"].value_counts())
 print("\nFiles Generated:")
 print("1. clustered_output.xlsx")
 print("2. dc_locations.xlsx")
-print("3. dc_network_map.html")
+print("3. index.html")
