@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from sklearn_extra.cluster import KMedoids
+from sklearn.cluster import KMeans
 import folium
 from math import radians, sin, cos, sqrt, atan2
 
@@ -71,46 +71,71 @@ def haversine(lat1, lon1, lat2, lon2):
 # =====================================================
 
 X = df[[LAT_COL, LON_COL]].values
-
-X_rad = np.radians(X)
+weights = df[WEIGHT_COL].values
 
 # =====================================================
-# K-MEDOIDS CLUSTERING
+# WEIGHTED K-MEANS
 # =====================================================
 
-kmedoids = KMedoids(
+kmeans = KMeans(
     n_clusters=K,
-    metric="haversine",
-    random_state=42
+    random_state=42,
+    n_init=10
 )
 
-kmedoids.fit(X_rad)
+kmeans.fit(
+    X,
+    sample_weight=weights
+)
 
 # =====================================================
 # ASSIGN CLUSTERS
 # =====================================================
 
-df["cluster"] = kmedoids.labels_
+df["cluster"] = kmeans.labels_
 
 # =====================================================
-# REALISTIC DC LOCATIONS
+# DC LOCATIONS
 # =====================================================
 
-medoid_indices = kmedoids.medoid_indices_
+dc_locations = pd.DataFrame(
+    kmeans.cluster_centers_,
+    columns=["dc_lat", "dc_long"]
+)
 
-dc_locations = df.iloc[
-    medoid_indices
-][
-    [LAT_COL, LON_COL]
-].copy()
+# =====================================================
+# FORCE DCs INSIDE INDIA
+# MAP TO NEAREST REAL STORE
+# =====================================================
 
-dc_locations.columns = [
-    "dc_lat",
-    "dc_long"
-]
+real_dc_locations = []
 
-dc_locations = dc_locations.reset_index(
-    drop=True
+for idx, dc in dc_locations.iterrows():
+
+    min_distance = 999999
+    nearest_store = None
+
+    for _, store in df.iterrows():
+
+        distance = haversine(
+            dc["dc_lat"],
+            dc["dc_long"],
+            store[LAT_COL],
+            store[LON_COL]
+        )
+
+        if distance < min_distance:
+
+            min_distance = distance
+            nearest_store = store
+
+    real_dc_locations.append({
+        "dc_lat": nearest_store[LAT_COL],
+        "dc_long": nearest_store[LON_COL]
+    })
+
+dc_locations = pd.DataFrame(
+    real_dc_locations
 )
 
 dc_locations["dc_id"] = [
@@ -163,7 +188,7 @@ df["distance_to_dc_km"] = (
 )
 
 # =====================================================
-# SAVE OUTPUTS
+# SAVE OUTPUT FILES
 # =====================================================
 
 df.to_excel(
@@ -188,7 +213,7 @@ df[
 )
 
 # =====================================================
-# CREATE MAP
+# CREATE INTERACTIVE MAP
 # =====================================================
 
 center_lat = df[LAT_COL].mean()
@@ -273,7 +298,7 @@ m.save("index.html")
 # =====================================================
 
 print("\n================================")
-print("K-MEDOIDS CLUSTERING COMPLETED")
+print("WEIGHTED K-MEANS COMPLETED")
 print("================================")
 
 print(f"\nNumber of DCs = {K}")
