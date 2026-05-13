@@ -416,7 +416,7 @@ for cluster_id, row in centroids_df.iterrows():
 routes_output = []
 store_level_cost_output = []
 
-MAX_ROUTE_DISTANCE = 1700
+MAX_ROUTE_DISTANCE = 1400
 
 # =====================================================
 # CLUSTER-WISE ORTOOLS
@@ -502,7 +502,7 @@ vehicle_names = []
 
 for _, truck in truck_df.iterrows():
 
-    for i in range(15):
+    for i in range(4):
 
         vehicle_capacities.append(
             int(truck["capacity_cft"])
@@ -689,7 +689,7 @@ for vehicle_id in range(num_vehicles):
     )
 
     distance_dimension.SetGlobalSpanCostCoefficient(
-        1000
+        100
     )
 
     # =================================================
@@ -708,7 +708,7 @@ for vehicle_id in range(num_vehicles):
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
     )
 
-    search_parameters.time_limit.seconds = 300
+    search_parameters.time_limit.seconds = 60
 
     # =================================================
     # SOLVE
