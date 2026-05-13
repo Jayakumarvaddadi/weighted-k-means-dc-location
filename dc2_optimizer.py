@@ -1,26 +1,20 @@
-# =====================================================
-# DC2 MILK RUN OPTIMIZATION
-# COMPLETE CODE
-# =====================================================
-
 import pandas as pd
-import numpy as np
-from sklearn.cluster import KMeans
-import folium
 from math import radians, sin, cos, sqrt, atan2
 
 from ortools.constraint_solver import pywrapcp
 from ortools.constraint_solver import routing_enums_pb2
 
 # =====================================================
-# LOAD INPUT FILES
+# LOAD FILES
 # =====================================================
 
-input_file = "saavu2.xlsx"
+input_file = "clustered_output.xlsx"
 truck_file = "truck_master.xlsx"
+dc_file = "dc_locations.xlsx"
 
 df = pd.read_excel(input_file)
 truck_df = pd.read_excel(truck_file)
+dc_locations = pd.read_excel(dc_file)
 
 # =====================================================
 # REQUIRED COLUMNS
@@ -28,7 +22,6 @@ truck_df = pd.read_excel(truck_file)
 
 LAT_COL = "lat"
 LON_COL = "long"
-WEIGHT_COL = "sales"
 STORE_COL = "store"
 DEMAND_COL = "demand_cft"
 
@@ -36,26 +29,11 @@ DEMAND_COL = "demand_cft"
 # PARAMETERS
 # =====================================================
 
-K = 6
-
 TARGET_DC = "DC_2"
 
 MAX_ROUTE_DISTANCE = 1400
 
 MONTHLY_MULTIPLIER = 10
-
-# =====================================================
-# CLEAN DATA
-# =====================================================
-
-df = df.dropna(
-    subset=[
-        LAT_COL,
-        LON_COL,
-        WEIGHT_COL,
-        DEMAND_COL
-    ]
-).copy()
 
 # =====================================================
 # HAVERSINE FUNCTION
@@ -83,92 +61,6 @@ def haversine(lat1, lon1, lat2, lon2):
     return R * c
 
 # =====================================================
-# PHASE 1
-# WEIGHTED K-MEANS
-# =====================================================
-
-X = df[[LAT_COL, LON_COL]].values
-weights = df[WEIGHT_COL].values
-
-kmeans = KMeans(
-    n_clusters=K,
-    random_state=42,
-    n_init=10
-)
-
-kmeans.fit(
-    X,
-    sample_weight=weights
-)
-
-df["cluster"] = kmeans.labels_
-
-# =====================================================
-# FORCE DCs TO REAL STORE LOCATIONS
-# =====================================================
-
-raw_dc_locations = pd.DataFrame(
-    kmeans.cluster_centers_,
-    columns=["dc_lat", "dc_long"]
-)
-
-real_dc_locations = []
-
-for idx, dc in raw_dc_locations.iterrows():
-
-    min_distance = 999999999
-
-    nearest_store = None
-
-    for _, store in df.iterrows():
-
-        distance = haversine(
-
-            float(dc["dc_lat"]),
-            float(dc["dc_long"]),
-
-            float(store[LAT_COL]),
-            float(store[LON_COL])
-        )
-
-        if distance < min_distance:
-
-            min_distance = distance
-
-            nearest_store = store
-
-    real_dc_locations.append({
-
-        "dc_lat":
-            float(nearest_store[LAT_COL]),
-
-        "dc_long":
-            float(nearest_store[LON_COL])
-    })
-
-dc_locations = pd.DataFrame(
-    real_dc_locations
-)
-
-dc_locations["dc_id"] = [
-    f"DC_{i+1}"
-    for i in range(K)
-]
-
-# =====================================================
-# ASSIGN DCS
-# =====================================================
-
-cluster_to_dc = {
-    i: f"DC_{i+1}"
-    for i in range(K)
-}
-
-df["assigned_dc"] = df["cluster"].map(
-    cluster_to_dc
-)
-
-# =====================================================
 # FILTER DC2 STORES
 # =====================================================
 
@@ -176,8 +68,10 @@ dc2_df = df[
     df["assigned_dc"] == TARGET_DC
 ].copy()
 
+print("\nDC2 STORES FOUND:", len(dc2_df))
+
 # =====================================================
-# GET DC2 LOCATION
+# GET DC LOCATION
 # =====================================================
 
 selected_dc = dc_locations[
@@ -258,11 +152,11 @@ for i in range(num_nodes):
 # VEHICLE CONFIGURATION
 # =====================================================
 
-largest_capacity = int(round(
+largest_capacity = int(
     truck_df["capacity_cft"].max()
-))
+)
 
-vehicle_count = int(len(dc2_df))
+vehicle_count = len(dc2_df)
 
 vehicle_capacities = [
     largest_capacity
@@ -275,15 +169,9 @@ vehicle_capacities = [
 data = {}
 
 data["distance_matrix"] = distance_matrix
-
 data["demands"] = demands
-
-data["vehicle_capacities"] = (
-    vehicle_capacities
-)
-
+data["vehicle_capacities"] = vehicle_capacities
 data["num_vehicles"] = vehicle_count
-
 data["depot"] = 0
 
 # =====================================================
@@ -296,26 +184,16 @@ manager = pywrapcp.RoutingIndexManager(
     data["depot"]
 )
 
-routing = pywrapcp.RoutingModel(
-    manager
-)
+routing = pywrapcp.RoutingModel(manager)
 
 # =====================================================
 # DISTANCE CALLBACK
 # =====================================================
 
-def distance_callback(
-    from_index,
-    to_index
-):
+def distance_callback(from_index, to_index):
 
-    from_node = manager.IndexToNode(
-        from_index
-    )
-
-    to_node = manager.IndexToNode(
-        to_index
-    )
+    from_node = manager.IndexToNode(from_index)
+    to_node = manager.IndexToNode(to_index)
 
     return int(
         data["distance_matrix"][
@@ -339,9 +217,7 @@ routing.SetArcCostEvaluatorOfAllVehicles(
 
 def demand_callback(from_index):
 
-    from_node = manager.IndexToNode(
-        from_index
-    )
+    from_node = manager.IndexToNode(from_index)
 
     return int(
         data["demands"][from_node]
@@ -372,13 +248,13 @@ routing.AddDimensionWithVehicleCapacity(
 routing.AddDimension(
     transit_callback_index,
     0,
-    int(MAX_ROUTE_DISTANCE),
+    MAX_ROUTE_DISTANCE,
     True,
     "Distance"
 )
 
 # =====================================================
-# MINIMIZE VEHICLES
+# MINIMIZE NUMBER OF VEHICLES
 # =====================================================
 
 for vehicle_id in range(vehicle_count):
@@ -414,8 +290,16 @@ solution = routing.SolveWithParameters(
     search_parameters
 )
 
+if solution:
+
+    print("\nSolution Found")
+
+else:
+
+    print("\nNo Solution Found")
+
 # =====================================================
-# ACTUAL ROUTE DISTANCE
+# ACTUAL DISTANCE FUNCTION
 # =====================================================
 
 def calculate_actual_route_distance(route_nodes):
@@ -432,10 +316,8 @@ def calculate_actual_route_distance(route_nodes):
     ].iloc[0]
 
     total_distance += haversine(
-
         DC_LAT,
         DC_LON,
-
         float(first_row[LAT_COL]),
         float(first_row[LON_COL])
     )
@@ -454,10 +336,8 @@ def calculate_actual_route_distance(route_nodes):
         ].iloc[0]
 
         total_distance += haversine(
-
             float(current_row[LAT_COL]),
             float(current_row[LON_COL]),
-
             float(next_row[LAT_COL]),
             float(next_row[LON_COL])
         )
@@ -469,10 +349,8 @@ def calculate_actual_route_distance(route_nodes):
     ].iloc[0]
 
     total_distance += haversine(
-
         float(last_row[LAT_COL]),
         float(last_row[LON_COL]),
-
         DC_LAT,
         DC_LON
     )
@@ -524,9 +402,6 @@ if solution:
             )
         )
 
-        if route_distance > MAX_ROUTE_DISTANCE:
-            continue
-
         feasible_trucks = truck_df[
             truck_df["capacity_cft"]
             >= route_load
@@ -548,37 +423,22 @@ if solution:
             by="monthly_cost"
         )
 
-        selected_truck = (
-            feasible_trucks.iloc[0]
-        )
+        selected_truck = feasible_trucks.iloc[0]
 
-        truck_capacity = int(round(
+        truck_capacity = int(
             selected_truck["capacity_cft"]
-        ))
-
-        fixed_cost = float(
-            selected_truck["fixed_cost"]
         )
-
-        variable_cost = float(
-            selected_truck[
-                "variable_cost_per_km"
-            ]
-        )
-
-        monthly_cost = (
-
-            fixed_cost
-
-            +
-
-            variable_cost * route_distance
-
-        ) * MONTHLY_MULTIPLIER
 
         utilization = (
             route_load / truck_capacity
         ) * 100
+
+        monthly_cost = (
+            selected_truck["fixed_cost"]
+            +
+            selected_truck["variable_cost_per_km"]
+            * route_distance
+        ) * MONTHLY_MULTIPLIER
 
         routes.append({
 
@@ -609,12 +469,6 @@ if solution:
             "route_distance_km":
                 round(route_distance, 2),
 
-            "fixed_cost":
-                round(fixed_cost, 2),
-
-            "variable_cost_per_km":
-                round(variable_cost, 2),
-
             "monthly_cost":
                 round(monthly_cost, 2)
         })
@@ -627,48 +481,10 @@ if solution:
 
 routes_df = pd.DataFrame(routes)
 
-routes_df = routes_df.sort_values(
-    by="monthly_cost"
-)
-
 routes_df.to_excel(
     "dc2_milk_run_routes.xlsx",
     index=False
 )
-
-# =====================================================
-# FINAL SUMMARY
-# =====================================================
-
-print("\n================================")
-print("DC2 MILK RUN OPTIMIZATION")
-print("================================")
-
-print(
-    f"\nTotal Routes = "
-    f"{len(routes_df)}"
-)
-
-if len(routes_df) > 0:
-
-    print(
-        f"\nTotal Monthly Cost = "
-        f"{routes_df['monthly_cost'].sum():,.2f}"
-    )
-
-    print(
-        f"\nAverage Utilization = "
-        f"{routes_df['truck_utilization_percent'].mean():.2f}%"
-    )
-
-    print(
-        f"\nAverage Route Distance = "
-        f"{routes_df['route_distance_km'].mean():.2f} km"
-    )
-
-else:
-
-    print("\nNo feasible routes found.")
 
 print("\nGenerated File:")
 print("dc2_milk_run_routes.xlsx")
