@@ -170,3 +170,370 @@ print("\nFiles Generated:")
 print("1. clustered_output.xlsx")
 print("2. dc_locations.xlsx")
 print("3. index.html")
+
+# =========================================
+# INSTALL REQUIRED PACKAGE
+# =========================================
+
+# Run once in terminal:
+# pip install ortools
+
+# =========================================
+# ADD THESE IMPORTS
+# =========================================
+
+from ortools.constraint_solver import pywrapcp
+from ortools.constraint_solver import routing_enums_pb2
+
+# =========================================
+# OR-TOOLS OPTIMIZATION SECTION
+# REPLACE YOUR EXISTING ROUTE LOGIC WITH THIS
+# =========================================
+
+# Prepare nodes
+store_locations = []
+store_demands = []
+store_names = []
+
+# DC node
+store_locations.append((DC_LAT, DC_LON))
+store_demands.append(0)
+store_names.append(TARGET_DC)
+
+# Store nodes
+for _, row in stores_df.iterrows():
+
+    store_locations.append(
+        (row[LAT_COL], row[LON_COL])
+    )
+
+    store_demands.append(
+        row[DEMAND_COL]
+    )
+
+    store_names.append(
+        row[STORE_COL]
+    )
+
+# =========================================
+# DISTANCE MATRIX
+# =========================================
+
+num_nodes = len(store_locations)
+
+distance_matrix = np.zeros((num_nodes, num_nodes))
+
+for i in range(num_nodes):
+
+    for j in range(num_nodes):
+
+        distance_matrix[i][j] = haversine(
+            store_locations[i][0],
+            store_locations[i][1],
+            store_locations[j][0],
+            store_locations[j][1]
+        )
+
+# =========================================
+# VEHICLE CONFIGURATION
+# =========================================
+
+largest_capacity = truck_df["capacity_cft"].max()
+
+vehicle_count = len(stores_df)
+
+vehicle_capacities = [
+    largest_capacity
+] * vehicle_count
+
+# =========================================
+# DATA MODEL
+# =========================================
+
+data = {}
+
+data["distance_matrix"] = (
+    distance_matrix.astype(int).tolist()
+)
+
+data["demands"] = [
+    int(x) for x in store_demands
+]
+
+data["vehicle_capacities"] = [
+    int(x) for x in vehicle_capacities
+]
+
+data["num_vehicles"] = vehicle_count
+
+data["depot"] = 0
+
+# =========================================
+# ROUTING INDEX MANAGER
+# =========================================
+
+manager = pywrapcp.RoutingIndexManager(
+    len(data["distance_matrix"]),
+    data["num_vehicles"],
+    data["depot"]
+)
+
+routing = pywrapcp.RoutingModel(manager)
+
+# =========================================
+# DISTANCE CALLBACK
+# =========================================
+
+def distance_callback(from_index, to_index):
+
+    from_node = manager.IndexToNode(from_index)
+    to_node = manager.IndexToNode(to_index)
+
+    return data["distance_matrix"][from_node][to_node]
+
+transit_callback_index = (
+    routing.RegisterTransitCallback(
+        distance_callback
+    )
+)
+
+routing.SetArcCostEvaluatorOfAllVehicles(
+    transit_callback_index
+)
+
+# =========================================
+# DEMAND CALLBACK
+# =========================================
+
+def demand_callback(from_index):
+
+    from_node = manager.IndexToNode(from_index)
+
+    return data["demands"][from_node]
+
+demand_callback_index = (
+    routing.RegisterUnaryTransitCallback(
+        demand_callback
+    )
+)
+
+# =========================================
+# CAPACITY CONSTRAINT
+# =========================================
+
+routing.AddDimensionWithVehicleCapacity(
+    demand_callback_index,
+    0,
+    data["vehicle_capacities"],
+    True,
+    "Capacity"
+)
+
+# =========================================
+# ROUTE DISTANCE CONSTRAINT
+# =========================================
+
+routing.AddDimension(
+    transit_callback_index,
+    0,
+    MAX_ROUTE_DISTANCE * 2,
+    True,
+    "Distance"
+)
+
+# =========================================
+# MINIMIZE NUMBER OF TRUCKS
+# =========================================
+
+for vehicle_id in range(vehicle_count):
+
+    routing.SetFixedCostOfVehicle(
+        100000,
+        vehicle_id
+    )
+
+# =========================================
+# SEARCH PARAMETERS
+# =========================================
+
+search_parameters = (
+    pywrapcp.DefaultRoutingSearchParameters()
+)
+
+search_parameters.first_solution_strategy = (
+    routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+)
+
+search_parameters.local_search_metaheuristic = (
+    routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+)
+
+search_parameters.time_limit.seconds = 60
+
+# =========================================
+# SOLVE
+# =========================================
+
+solution = routing.SolveWithParameters(
+    search_parameters
+)
+
+# =========================================
+# EXTRACT OPTIMIZED ROUTES
+# =========================================
+
+routes = []
+
+route_id = 1
+
+if solution:
+
+    for vehicle_id in range(vehicle_count):
+
+        index = routing.Start(vehicle_id)
+
+        route_distance = 0
+        route_load = 0
+
+        route_nodes = []
+
+        while not routing.IsEnd(index):
+
+            node = manager.IndexToNode(index)
+
+            if node != 0:
+
+                route_nodes.append(
+                    store_names[node]
+                )
+
+                route_load += (
+                    data["demands"][node]
+                )
+
+            previous_index = index
+
+            index = solution.Value(
+                routing.NextVar(index)
+            )
+
+            route_distance += (
+                routing.GetArcCostForVehicle(
+                    previous_index,
+                    index,
+                    vehicle_id
+                )
+            )
+
+        # Skip empty routes
+        if len(route_nodes) == 0:
+            continue
+
+        # =====================================
+        # SELECT OPTIMAL TRUCK
+        # =====================================
+
+        feasible_trucks = truck_df[
+            truck_df["capacity_cft"] >= route_load
+        ].copy()
+
+        selected_truck = feasible_trucks.iloc[0]
+
+        truck_capacity = (
+            selected_truck["capacity_cft"]
+        )
+
+        fixed_cost = (
+            selected_truck["fixed_cost"]
+        )
+
+        variable_cost = (
+            selected_truck[
+                "variable_cost_per_km"
+            ]
+        )
+
+        # =====================================
+        # UTILIZATION
+        # =====================================
+
+        utilization = (
+            route_load / truck_capacity
+        ) * 100
+
+        # =====================================
+        # MONTHLY COST
+        # =====================================
+
+        monthly_cost = (
+            fixed_cost
+            + variable_cost * route_distance
+        ) * MONTHLY_MULTIPLIER
+
+        routes.append({
+
+            "route_id":
+                f"R{route_id}",
+
+            "dc":
+                TARGET_DC,
+
+            "stores_served":
+                " -> ".join(route_nodes),
+
+            "number_of_stores":
+                len(route_nodes),
+
+            "total_demand_cft":
+                round(route_load, 2),
+
+            "truck_selected":
+                selected_truck["truck_type"],
+
+            "truck_capacity_cft":
+                truck_capacity,
+
+            "truck_utilization_percent":
+                round(utilization, 2),
+
+            "route_distance_km":
+                round(route_distance, 2),
+
+            "monthly_cost":
+                round(monthly_cost, 2)
+        })
+
+        route_id += 1
+
+# =========================================
+# FINAL OUTPUT
+# =========================================
+
+routes_df = pd.DataFrame(routes)
+
+routes_df.to_excel(
+    "dc1_milk_run_routes.xlsx",
+    index=False
+)
+
+print("\n================================")
+print("DC1 OR-TOOLS OPTIMIZATION DONE")
+print("================================")
+
+print(
+    f"\nTotal Monthly Cost: "
+    f"{routes_df['monthly_cost'].sum():,.2f}"
+)
+
+print(
+    f"\nTotal Routes: "
+    f"{len(routes_df)}"
+)
+
+print(
+    f"\nAverage Utilization: "
+    f"{routes_df['truck_utilization_percent'].mean():.2f}%"
+)
+
+print("\nOutput Generated:")
+print("dc1_milk_run_routes.xlsx")
