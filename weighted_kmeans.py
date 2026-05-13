@@ -1,102 +1,172 @@
-import os
 import pandas as pd
 import numpy as np
-from math import radians, sin, cos, sqrt, atan2
 from sklearn.cluster import KMeans
 import folium
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 
-# =====================================================
-# 1. CORE UTILITIES
-# =====================================================
-def haversine(lat1, lon1, lat2, lon2):
-    R = 6371 # Earth radius in km
-    dlat, dlon = radians(lat2 - lat1), radians(lon2 - lon1)
-    a = (sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2)
-    c = 2 * atan2(sqrt(a), sqrt(1 - a))
-    return R * c
+# =========================
+# LOAD DATA
+# =========================
 
-# =====================================================
-# 2. LOAD & CLEAN DATA
-# =====================================================
-# Update filenames if necessary (e.g., "saavu2.xlsx")
-df = pd.read_excel("saavu2.xlsx")
-df.columns = df.columns.str.lower().str.strip()
+input_file = "saavu2.xlsx"
 
-# Cleaning
-df = df[(df["lat"] != 0) & (df["long"] != 0)].dropna(subset=["lat", "long", "sales"])
-df["sales"] = pd.to_numeric(df["sales"], errors="coerce").fillna(1).clip(lower=1)
+df = pd.read_excel(input_file)
 
-# =====================================================
-# 3. PHASE 1: DC NETWORK DESIGN (FIXED K=4)
-# =====================================================
-K_CLUSTERS = 4
-X = df[["lat", "long"]].values
-weights = df["sales"].values
+# =========================
+# REQUIRED COLUMNS
+# =========================
 
-print(f"Executing Weighted KMeans with K={K_CLUSTERS}...")
-kmeans = KMeans(n_clusters=K_CLUSTERS, random_state=42, n_init=10)
-kmeans.fit(X, sample_weight=weights)
+LAT_COL = "lat"
+LON_COL = "long"
+WEIGHT_COL = "sales"
+STORE_COL = "store"
 
-df["cluster"] = kmeans.labels_
-centroids = kmeans.cluster_centers_
+# Remove missing values
+df = df.dropna(subset=[LAT_COL, LON_COL, WEIGHT_COL]).copy()
 
-# SNAP TO NEAREST REAL STORE
-real_centroids = []
-for center in centroids:
-    distances = np.sqrt((X[:, 0] - center[0]) ** 2 + (X[:, 1] - center[1]) ** 2)
-    real_centroids.append(X[np.argmin(distances)])
-snapped_centroids = np.array(real_centroids)
+# =========================
+# PREPARE DATA
+# =========================
 
-# ASSIGN DC COORDINATES back to stores
-df["dc_lat"] = df["cluster"].apply(lambda x: snapped_centroids[x][0])
-df["dc_long"] = df["cluster"].apply(lambda x: snapped_centroids[x][1])
+X = df[[LAT_COL, LON_COL]].values
+weights = df[WEIGHT_COL].values
 
-# Calculate distances
-df["distance_km"] = df.apply(
-    lambda row: haversine(row["lat"], row["long"], row["dc_lat"], row["dc_long"]), axis=1
+# =========================
+# WEIGHTED K-MEANS
+# =========================
+
+K = 4
+
+kmeans = KMeans(
+    n_clusters=K,
+    random_state=42,
+    n_init=10
 )
 
-# =====================================================
-# 4. EXPORT OUTPUTS
-# =====================================================
-df.to_excel("clustered_output.xlsx", index=False)
-pd.DataFrame(snapped_centroids, columns=["lat", "long"]).to_excel("dc_locations.xlsx", index=False)
+kmeans.fit(X, sample_weight=weights)
 
-pd.DataFrame({
-    "Fixed_K": [K_CLUSTERS],
-    "Max_Distance_km": [df["distance_km"].max()],
-    "Avg_Distance_km": [df["distance_km"].mean()]
-}).to_excel("model_summary.xlsx", index=False)
+# Assign clusters
+df["cluster"] = kmeans.labels_
 
-# =====================================================
-# 5. VISUALIZATION (MAP)
-# =====================================================
-# Create map centered on average coordinates
-m = folium.Map(location=[df["lat"].mean(), df["long"].mean()], zoom_start=5)
+# =========================
+# DC LOCATIONS
+# =========================
 
-# Standard map colors for clusters
-color_list = ['red', 'blue', 'green', 'purple', 'orange', 'darkred', 'cadetblue']
+dc_locations = pd.DataFrame(
+    kmeans.cluster_centers_,
+    columns=["dc_lat", "dc_long"]
+)
 
-# Plot Stores
-for _, row in df.iterrows():
+dc_locations["dc_id"] = [
+    f"DC_{i+1}" for i in range(K)
+]
+
+# =========================
+# ASSIGN DC TO STORES
+# =========================
+
+cluster_to_dc = {
+    i: f"DC_{i+1}" for i in range(K)
+}
+
+df["assigned_dc"] = df["cluster"].map(cluster_to_dc)
+
+# =========================
+# SAVE OUTPUT FILES
+# =========================
+
+df.to_excel(
+    "clustered_output.xlsx",
+    index=False
+)
+
+dc_locations.to_excel(
+    "dc_locations.xlsx",
+    index=False
+)
+
+# =========================
+# CREATE INTERACTIVE MAP
+# =========================
+
+# Map center
+center_lat = df[LAT_COL].mean()
+center_lon = df[LON_COL].mean()
+
+m = folium.Map(
+    location=[center_lat, center_lon],
+    zoom_start=5
+)
+
+# Cluster colors
+colors = [
+    "red",
+    "blue",
+    "green",
+    "purple",
+    "orange",
+    "darkred",
+    "cadetblue",
+    "darkgreen"
+]
+
+# =========================
+# PLOT STORES
+# =========================
+
+for idx, row in df.iterrows():
+
+    cluster_id = int(row["cluster"])
+    color = colors[cluster_id % len(colors)]
+
     folium.CircleMarker(
-        location=[row["lat"], row["long"]],
-        radius=3,
-        color=color_list[int(row["cluster"]) % len(color_list)],
+        location=[row[LAT_COL], row[LON_COL]],
+        radius=4,
+        color=color,
         fill=True,
+        fill_color=color,
         fill_opacity=0.7,
-        popup=f"Store: {row.get('store', 'N/A')}<br>Cluster: {row['cluster']}"
+        popup=(
+            f"Store: {row[STORE_COL]}<br>"
+            f"Sales: {row[WEIGHT_COL]}<br>"
+            f"Assigned DC: {row['assigned_dc']}"
+        )
     ).add_to(m)
 
-# Plot DCs as Stars
-for i, dc in enumerate(snapped_centroids):
+# =========================
+# PLOT DC LOCATIONS
+# =========================
+
+for idx, row in dc_locations.iterrows():
+
+    color = colors[idx % len(colors)]
+
     folium.Marker(
-        location=[dc[0], dc[1]],
-        icon=folium.Icon(color="black", icon="star"),
-        popup=f"DC {i} (Primary Hub)"
+        location=[row["dc_lat"], row["dc_long"]],
+        popup=f"{row['dc_id']}",
+        icon=folium.Icon(
+            color=color,
+            icon="warehouse",
+            prefix="fa"
+        )
     ).add_to(m)
+
+# =========================
+# SAVE MAP
+# =========================
 
 m.save("dc_network_map.html")
-print(f"Process complete. K={K_CLUSTERS}. Map saved as dc_network_map.html")
+
+# =========================
+# PRINT SUMMARY
+# =========================
+
+print("\nWeighted K-Means Completed Successfully")
+print(f"\nNumber of DCs Created: {K}")
+
+print("\nStores per Cluster:")
+print(df["assigned_dc"].value_counts())
+
+print("\nFiles Generated:")
+print("1. clustered_output.xlsx")
+print("2. dc_locations.xlsx")
+print("3. dc_network_map.html")
