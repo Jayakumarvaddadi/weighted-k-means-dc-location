@@ -1,21 +1,16 @@
 import pandas as pd
 import numpy as np
-from sklearn.cluster import KMeans
+from sklearn.cluster import MiniBatchKMeans
 import folium
 from math import radians, sin, cos, sqrt, atan2
 
-from ortools.constraint_solver import pywrapcp
-from ortools.constraint_solver import routing_enums_pb2
-
 # =====================================================
-# LOAD INPUT FILES
+# LOAD INPUT FILE
 # =====================================================
 
 input_file = "saavu2.xlsx"
-truck_file = "truck_master.xlsx"
 
 df = pd.read_excel(input_file)
-truck_df = pd.read_excel(truck_file)
 
 # =====================================================
 # REQUIRED COLUMNS
@@ -31,11 +26,7 @@ DEMAND_COL = "demand_cft"
 # PARAMETERS
 # =====================================================
 
-K = 4
-TARGET_DC = "DC_1"
-
-MAX_ROUTE_DISTANCE = 700
-MONTHLY_MULTIPLIER = 10
+MAX_ONE_WAY_DISTANCE = 700
 
 # =====================================================
 # REMOVE MISSING VALUES
@@ -49,152 +40,6 @@ df = df.dropna(
         DEMAND_COL
     ]
 ).copy()
-
-# =====================================================
-# PREPARE DATA
-# =====================================================
-
-X = df[[LAT_COL, LON_COL]].values
-weights = df[WEIGHT_COL].values
-
-# =====================================================
-# WEIGHTED K-MEANS
-# =====================================================
-
-kmeans = KMeans(
-    n_clusters=K,
-    random_state=42,
-    n_init=10
-)
-
-kmeans.fit(X, sample_weight=weights)
-
-df["cluster"] = kmeans.labels_
-
-# =====================================================
-# DC LOCATIONS
-# =====================================================
-
-dc_locations = pd.DataFrame(
-    kmeans.cluster_centers_,
-    columns=["dc_lat", "dc_long"]
-)
-
-dc_locations["dc_id"] = [
-    f"DC_{i+1}" for i in range(K)
-]
-
-# =====================================================
-# ASSIGN DC
-# =====================================================
-
-cluster_to_dc = {
-    i: f"DC_{i+1}" for i in range(K)
-}
-
-df["assigned_dc"] = df["cluster"].map(
-    cluster_to_dc
-)
-
-# =====================================================
-# SAVE CLUSTER OUTPUTS
-# =====================================================
-
-df.to_excel(
-    "clustered_output.xlsx",
-    index=False
-)
-
-dc_locations.to_excel(
-    "dc_locations.xlsx",
-    index=False
-)
-
-# =====================================================
-# CREATE MAP
-# =====================================================
-
-center_lat = df[LAT_COL].mean()
-center_lon = df[LON_COL].mean()
-
-m = folium.Map(
-    location=[center_lat, center_lon],
-    zoom_start=5
-)
-
-colors = [
-    "red",
-    "blue",
-    "green",
-    "purple"
-]
-
-# Plot stores
-for idx, row in df.iterrows():
-
-    cluster_id = int(row["cluster"])
-
-    color = colors[
-        cluster_id % len(colors)
-    ]
-
-    folium.CircleMarker(
-        location=[
-            row[LAT_COL],
-            row[LON_COL]
-        ],
-        radius=4,
-        color=color,
-        fill=True,
-        fill_color=color,
-        fill_opacity=0.7,
-        popup=(
-            f"Store: {row[STORE_COL]}<br>"
-            f"Sales: {row[WEIGHT_COL]}<br>"
-            f"Demand: {row[DEMAND_COL]}<br>"
-            f"Assigned DC: {row['assigned_dc']}"
-        )
-    ).add_to(m)
-
-# Plot DCs
-for idx, row in dc_locations.iterrows():
-
-    color = colors[
-        idx % len(colors)
-    ]
-
-    folium.Marker(
-        location=[
-            row["dc_lat"],
-            row["dc_long"]
-        ],
-        popup=row["dc_id"],
-        icon=folium.Icon(
-            color=color,
-            icon="home"
-        )
-    ).add_to(m)
-
-m.save("index.html")
-
-# =====================================================
-# SELECT DC1
-# =====================================================
-
-selected_dc = dc_locations[
-    dc_locations["dc_id"] == TARGET_DC
-].iloc[0]
-
-DC_LAT = selected_dc["dc_lat"]
-DC_LON = selected_dc["dc_long"]
-
-# =====================================================
-# FILTER ONLY DC1 STORES
-# =====================================================
-
-stores_df = df[
-    df["assigned_dc"] == TARGET_DC
-].copy()
 
 # =====================================================
 # HAVERSINE FUNCTION
@@ -222,28 +67,148 @@ def haversine(lat1, lon1, lat2, lon2):
     return R * c
 
 # =====================================================
-# DISTANCE FROM DC
+# PREPARE DATA
 # =====================================================
 
-stores_df["distance_from_dc"] = stores_df.apply(
-    lambda row: haversine(
-        DC_LAT,
-        DC_LON,
-        row[LAT_COL],
-        row[LON_COL]
-    ),
-    axis=1
+X = df[[LAT_COL, LON_COL]].values
+weights = df[WEIGHT_COL].values
+
+# =====================================================
+# AUTOMATIC DC GENERATION
+# =====================================================
+
+K = 1
+
+while True:
+
+    print(f"\nTesting K = {K}")
+
+    kmeans = MiniBatchKMeans(
+        n_clusters=K,
+        random_state=42,
+        batch_size=1024,
+        n_init=10
+    )
+
+    kmeans.fit(X, sample_weight=weights)
+
+    labels = kmeans.labels_
+    centers = kmeans.cluster_centers_
+
+    max_distance_found = 0
+
+    # =============================================
+    # CHECK MAX DISTANCE
+    # =============================================
+
+    for idx, row in df.iterrows():
+
+        cluster_id = labels[idx]
+
+        dc_lat = centers[cluster_id][0]
+        dc_lon = centers[cluster_id][1]
+
+        distance = haversine(
+            row[LAT_COL],
+            row[LON_COL],
+            dc_lat,
+            dc_lon
+        )
+
+        if distance > max_distance_found:
+            max_distance_found = distance
+
+    print(
+        f"Maximum One-Way Distance = "
+        f"{max_distance_found:.2f} km"
+    )
+
+    # =============================================
+    # STOP CONDITION
+    # =============================================
+
+    if max_distance_found <= MAX_ONE_WAY_DISTANCE:
+        break
+
+    K += 1
+
+# =====================================================
+# FINAL CLUSTER ASSIGNMENT
+# =====================================================
+
+df["cluster"] = labels
+
+# =====================================================
+# DC LOCATIONS
+# =====================================================
+
+dc_locations = pd.DataFrame(
+    centers,
+    columns=["dc_lat", "dc_long"]
+)
+
+dc_locations["dc_id"] = [
+    f"DC_{i+1}" for i in range(K)
+]
+
+# =====================================================
+# ASSIGN DCS
+# =====================================================
+
+cluster_to_dc = {
+    i: f"DC_{i+1}"
+    for i in range(K)
+}
+
+df["assigned_dc"] = df["cluster"].map(
+    cluster_to_dc
 )
 
 # =====================================================
-# SAVE STORE-DC DISTANCES
+# STORE-DC DISTANCE
 # =====================================================
 
-stores_df[
+store_dc_distances = []
+
+for idx, row in df.iterrows():
+
+    cluster_id = row["cluster"]
+
+    dc_lat = centers[cluster_id][0]
+    dc_lon = centers[cluster_id][1]
+
+    distance = haversine(
+        row[LAT_COL],
+        row[LON_COL],
+        dc_lat,
+        dc_lon
+    )
+
+    store_dc_distances.append(distance)
+
+df["distance_to_dc_km"] = (
+    store_dc_distances
+)
+
+# =====================================================
+# SAVE OUTPUT FILES
+# =====================================================
+
+df.to_excel(
+    "clustered_output.xlsx",
+    index=False
+)
+
+dc_locations.to_excel(
+    "dc_locations.xlsx",
+    index=False
+)
+
+df[
     [
         STORE_COL,
         "assigned_dc",
-        "distance_from_dc"
+        "distance_to_dc_km"
     ]
 ].to_excel(
     "store_dc_distances.xlsx",
@@ -251,375 +216,114 @@ stores_df[
 )
 
 # =====================================================
-# PREPARE OR-TOOLS DATA
+# CREATE INTERACTIVE MAP
 # =====================================================
 
-store_locations = []
-store_demands = []
-store_names = []
+center_lat = df[LAT_COL].mean()
+center_lon = df[LON_COL].mean()
 
-# DC node
-store_locations.append(
-    (DC_LAT, DC_LON)
+m = folium.Map(
+    location=[center_lat, center_lon],
+    zoom_start=5
 )
 
-store_demands.append(0)
-store_names.append(TARGET_DC)
+colors = [
+    "red",
+    "blue",
+    "green",
+    "purple",
+    "orange",
+    "darkred",
+    "cadetblue",
+    "darkgreen",
+    "black",
+    "pink"
+]
 
-# Store nodes
-for _, row in stores_df.iterrows():
+# =====================================================
+# PLOT STORES
+# =====================================================
 
-    store_locations.append(
-        (
+for idx, row in df.iterrows():
+
+    cluster_id = int(row["cluster"])
+
+    color = colors[
+        cluster_id % len(colors)
+    ]
+
+    folium.CircleMarker(
+        location=[
             row[LAT_COL],
             row[LON_COL]
+        ],
+        radius=4,
+        color=color,
+        fill=True,
+        fill_color=color,
+        fill_opacity=0.7,
+        popup=(
+            f"Store: {row[STORE_COL]}<br>"
+            f"Sales: {row[WEIGHT_COL]}<br>"
+            f"Demand: {row[DEMAND_COL]}<br>"
+            f"Assigned DC: {row['assigned_dc']}<br>"
+            f"Distance to DC: "
+            f"{row['distance_to_dc_km']:.2f} km"
         )
-    )
-
-    store_demands.append(
-        int(row[DEMAND_COL])
-    )
-
-    store_names.append(
-        row[STORE_COL]
-    )
+    ).add_to(m)
 
 # =====================================================
-# DISTANCE MATRIX
+# PLOT DCS
 # =====================================================
 
-num_nodes = len(store_locations)
+for idx, row in dc_locations.iterrows():
 
-distance_matrix = np.zeros(
-    (num_nodes, num_nodes)
-)
+    color = colors[
+        idx % len(colors)
+    ]
 
-for i in range(num_nodes):
-
-    for j in range(num_nodes):
-
-        distance_matrix[i][j] = haversine(
-            store_locations[i][0],
-            store_locations[i][1],
-            store_locations[j][0],
-            store_locations[j][1]
+    folium.Marker(
+        location=[
+            row["dc_lat"],
+            row["dc_long"]
+        ],
+        popup=row["dc_id"],
+        icon=folium.Icon(
+            color=color,
+            icon="home"
         )
+    ).add_to(m)
 
 # =====================================================
-# VEHICLE CONFIGURATION
+# SAVE MAP
 # =====================================================
 
-largest_capacity = truck_df[
-    "capacity_cft"
-].max()
-
-vehicle_count = len(stores_df)
-
-vehicle_capacities = [
-    int(largest_capacity)
-] * vehicle_count
-
-# =====================================================
-# DATA MODEL
-# =====================================================
-
-data = {}
-
-data["distance_matrix"] = (
-    distance_matrix.astype(int).tolist()
-)
-
-data["demands"] = store_demands
-
-data["vehicle_capacities"] = (
-    vehicle_capacities
-)
-
-data["num_vehicles"] = vehicle_count
-
-data["depot"] = 0
-
-# =====================================================
-# ROUTING MANAGER
-# =====================================================
-
-manager = pywrapcp.RoutingIndexManager(
-    len(data["distance_matrix"]),
-    data["num_vehicles"],
-    data["depot"]
-)
-
-routing = pywrapcp.RoutingModel(
-    manager
-)
-
-# =====================================================
-# DISTANCE CALLBACK
-# =====================================================
-
-def distance_callback(
-    from_index,
-    to_index
-):
-
-    from_node = manager.IndexToNode(
-        from_index
-    )
-
-    to_node = manager.IndexToNode(
-        to_index
-    )
-
-    return data["distance_matrix"][
-        from_node
-    ][to_node]
-
-transit_callback_index = (
-    routing.RegisterTransitCallback(
-        distance_callback
-    )
-)
-
-routing.SetArcCostEvaluatorOfAllVehicles(
-    transit_callback_index
-)
-
-# =====================================================
-# DEMAND CALLBACK
-# =====================================================
-
-def demand_callback(from_index):
-
-    from_node = manager.IndexToNode(
-        from_index
-    )
-
-    return data["demands"][from_node]
-
-demand_callback_index = (
-    routing.RegisterUnaryTransitCallback(
-        demand_callback
-    )
-)
-
-# =====================================================
-# CAPACITY CONSTRAINT
-# =====================================================
-
-routing.AddDimensionWithVehicleCapacity(
-    demand_callback_index,
-    0,
-    data["vehicle_capacities"],
-    True,
-    "Capacity"
-)
-
-# =====================================================
-# DISTANCE CONSTRAINT
-# =====================================================
-
-routing.AddDimension(
-    transit_callback_index,
-    0,
-    MAX_ROUTE_DISTANCE * 2,
-    True,
-    "Distance"
-)
-
-# =====================================================
-# MINIMIZE NUMBER OF VEHICLES
-# =====================================================
-
-for vehicle_id in range(vehicle_count):
-
-    routing.SetFixedCostOfVehicle(
-        100000,
-        vehicle_id
-    )
-
-# =====================================================
-# SEARCH PARAMETERS
-# =====================================================
-
-search_parameters = (
-    pywrapcp.DefaultRoutingSearchParameters()
-)
-
-search_parameters.first_solution_strategy = (
-    routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-)
-
-search_parameters.local_search_metaheuristic = (
-    routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-)
-
-search_parameters.time_limit.seconds = 60
-
-# =====================================================
-# SOLVE
-# =====================================================
-
-solution = routing.SolveWithParameters(
-    search_parameters
-)
-
-# =====================================================
-# EXTRACT ROUTES
-# =====================================================
-
-routes = []
-
-route_id = 1
-
-if solution:
-
-    for vehicle_id in range(vehicle_count):
-
-        index = routing.Start(vehicle_id)
-
-        route_distance = 0
-        route_load = 0
-
-        route_nodes = []
-
-        while not routing.IsEnd(index):
-
-            node = manager.IndexToNode(index)
-
-            if node != 0:
-
-                route_nodes.append(
-                    store_names[node]
-                )
-
-                route_load += (
-                    data["demands"][node]
-                )
-
-            previous_index = index
-
-            index = solution.Value(
-                routing.NextVar(index)
-            )
-
-            route_distance += (
-                routing.GetArcCostForVehicle(
-                    previous_index,
-                    index,
-                    vehicle_id
-                )
-            )
-
-        if len(route_nodes) == 0:
-            continue
-
-        # =================================================
-        # SELECT OPTIMAL TRUCK
-        # =================================================
-
-        feasible_trucks = truck_df[
-            truck_df["capacity_cft"] >= route_load
-        ].copy()
-
-        selected_truck = (
-            feasible_trucks.iloc[0]
-        )
-
-        truck_capacity = (
-            selected_truck["capacity_cft"]
-        )
-
-        fixed_cost = (
-            selected_truck["fixed_cost"]
-        )
-
-        variable_cost = (
-            selected_truck[
-                "variable_cost_per_km"
-            ]
-        )
-
-        utilization = (
-            route_load / truck_capacity
-        ) * 100
-
-        monthly_cost = (
-            fixed_cost
-            + variable_cost * route_distance
-        ) * MONTHLY_MULTIPLIER
-
-        routes.append({
-
-            "route_id":
-                f"R{route_id}",
-
-            "dc":
-                TARGET_DC,
-
-            "stores_served":
-                " -> ".join(route_nodes),
-
-            "number_of_stores":
-                len(route_nodes),
-
-            "total_demand_cft":
-                round(route_load, 2),
-
-            "truck_selected":
-                selected_truck["truck_type"],
-
-            "truck_capacity_cft":
-                truck_capacity,
-
-            "truck_utilization_percent":
-                round(utilization, 2),
-
-            "route_distance_km":
-                round(route_distance, 2),
-
-            "monthly_cost":
-                round(monthly_cost, 2)
-        })
-
-        route_id += 1
-
-# =====================================================
-# FINAL OUTPUT
-# =====================================================
-
-routes_df = pd.DataFrame(routes)
-
-routes_df.to_excel(
-    "dc1_milk_run_routes.xlsx",
-    index=False
-)
+m.save("index.html")
 
 # =====================================================
 # SUMMARY
 # =====================================================
 
 print("\n================================")
-print("DC1 OR-TOOLS OPTIMIZATION DONE")
+print("AUTOMATIC DC OPTIMIZATION DONE")
 print("================================")
 
-print(
-    f"\nTotal Monthly Cost: "
-    f"{routes_df['monthly_cost'].sum():,.2f}"
-)
+print(f"\nOptimal Number of DCs = {K}")
 
 print(
-    f"\nTotal Routes: "
-    f"{len(routes_df)}"
+    f"\nMaximum Store Distance = "
+    f"{max_distance_found:.2f} km"
 )
 
+print("\nStores per DC:")
+
 print(
-    f"\nAverage Utilization: "
-    f"{routes_df['truck_utilization_percent'].mean():.2f}%"
+    df["assigned_dc"].value_counts()
 )
 
 print("\nGenerated Files:")
+
 print("1. clustered_output.xlsx")
 print("2. dc_locations.xlsx")
 print("3. store_dc_distances.xlsx")
-print("4. dc1_milk_run_routes.xlsx")
-print("5. index.html")
+print("4. index.html")
