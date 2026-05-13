@@ -522,21 +522,21 @@ for _, truck in truck_df.iterrows():
 
 num_vehicles = len(vehicle_capacities)
     # =================================================
-    # ROUTING MODEL
-    # =================================================
+# ROUTING MODEL
+# =================================================
 
-    manager = pywrapcp.RoutingIndexManager(
+manager = pywrapcp.RoutingIndexManager(
 
-        len(distance_matrix),
+    len(distance_matrix),
 
-        num_vehicles,
+    num_vehicles,
 
-        0
-    )
+    0
+)
 
-    routing = pywrapcp.RoutingModel(
-        manager
-    )
+routing = pywrapcp.RoutingModel(
+    manager
+)
 
     # =================================================
     # DISTANCE CALLBACK
