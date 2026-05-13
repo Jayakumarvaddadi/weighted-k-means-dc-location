@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from sklearn.cluster import KMeans
+from sklearn.cluster import MiniBatchKMeans
 import folium
 from math import radians, sin, cos, sqrt, atan2
 
@@ -26,7 +26,7 @@ DEMAND_COL = "demand_cft"
 # PARAMETERS
 # =====================================================
 
-K = 4
+MAX_ONE_WAY_DISTANCE = 700
 
 # =====================================================
 # REMOVE MISSING VALUES
@@ -74,32 +74,76 @@ X = df[[LAT_COL, LON_COL]].values
 weights = df[WEIGHT_COL].values
 
 # =====================================================
-# WEIGHTED K-MEANS
+# AUTOMATIC DC GENERATION
 # =====================================================
 
-kmeans = KMeans(
-    n_clusters=K,
-    random_state=42,
-    n_init=10
-)
+K = 1
 
-kmeans.fit(
-    X,
-    sample_weight=weights
-)
+while True:
+
+    print(f"\nTesting K = {K}")
+
+    kmeans = MiniBatchKMeans(
+        n_clusters=K,
+        random_state=42,
+        batch_size=1024,
+        n_init=10
+    )
+
+    kmeans.fit(X, sample_weight=weights)
+
+    labels = kmeans.labels_
+    centers = kmeans.cluster_centers_
+
+    max_distance_found = 0
+
+    # =============================================
+    # CHECK MAX DISTANCE
+    # =============================================
+
+    for idx, row in df.iterrows():
+
+        cluster_id = labels[idx]
+
+        dc_lat = centers[cluster_id][0]
+        dc_lon = centers[cluster_id][1]
+
+        distance = haversine(
+            row[LAT_COL],
+            row[LON_COL],
+            dc_lat,
+            dc_lon
+        )
+
+        if distance > max_distance_found:
+            max_distance_found = distance
+
+    print(
+        f"Maximum One-Way Distance = "
+        f"{max_distance_found:.2f} km"
+    )
+
+    # =============================================
+    # STOP CONDITION
+    # =============================================
+
+    if max_distance_found <= MAX_ONE_WAY_DISTANCE:
+        break
+
+    K += 1
 
 # =====================================================
-# CLUSTER ASSIGNMENT
+# FINAL CLUSTER ASSIGNMENT
 # =====================================================
 
-df["cluster"] = kmeans.labels_
+df["cluster"] = labels
 
 # =====================================================
 # DC LOCATIONS
 # =====================================================
 
 dc_locations = pd.DataFrame(
-    kmeans.cluster_centers_,
+    centers,
     columns=["dc_lat", "dc_long"]
 )
 
@@ -108,7 +152,7 @@ dc_locations["dc_id"] = [
 ]
 
 # =====================================================
-# ASSIGN DC
+# ASSIGN DCS
 # =====================================================
 
 cluster_to_dc = {
@@ -121,7 +165,7 @@ df["assigned_dc"] = df["cluster"].map(
 )
 
 # =====================================================
-# STORE TO DC DISTANCE
+# STORE-DC DISTANCE
 # =====================================================
 
 store_dc_distances = []
@@ -130,13 +174,8 @@ for idx, row in df.iterrows():
 
     cluster_id = row["cluster"]
 
-    dc_lat = (
-        kmeans.cluster_centers_[cluster_id][0]
-    )
-
-    dc_lon = (
-        kmeans.cluster_centers_[cluster_id][1]
-    )
+    dc_lat = centers[cluster_id][0]
+    dc_lon = centers[cluster_id][1]
 
     distance = haversine(
         row[LAT_COL],
@@ -192,7 +231,13 @@ colors = [
     "red",
     "blue",
     "green",
-    "purple"
+    "purple",
+    "orange",
+    "darkred",
+    "cadetblue",
+    "darkgreen",
+    "black",
+    "pink"
 ]
 
 # =====================================================
@@ -260,25 +305,20 @@ m.save("index.html")
 # =====================================================
 
 print("\n================================")
-print("WEIGHTED K-MEANS COMPLETED")
+print("AUTOMATIC DC OPTIMIZATION DONE")
 print("================================")
 
-print(f"\nNumber of DCs = {K}")
+print(f"\nOptimal Number of DCs = {K}")
+
+print(
+    f"\nMaximum Store Distance = "
+    f"{max_distance_found:.2f} km"
+)
 
 print("\nStores per DC:")
 
 print(
     df["assigned_dc"].value_counts()
-)
-
-print(
-    f"\nMaximum Store Distance = "
-    f"{df['distance_to_dc_km'].max():.2f} km"
-)
-
-print(
-    f"\nAverage Store Distance = "
-    f"{df['distance_to_dc_km'].mean():.2f} km"
 )
 
 print("\nGenerated Files:")
