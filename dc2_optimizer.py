@@ -1,3 +1,4 @@
+
 import pandas as pd
 from math import radians, sin, cos, sqrt, atan2
 
@@ -31,7 +32,7 @@ DEMAND_COL = "demand_cft"
 
 TARGET_DC = "DC_2"
 
-MAX_ROUTE_DISTANCE = 1400
+MAX_ROUTE_DISTANCE = 2000
 
 MONTHLY_MULTIPLIER = 10
 
@@ -441,7 +442,11 @@ if solution:
 # =====================================================
 
 routes_df = pd.DataFrame(routes)
+if len(routes) == 0:
 
+    print("\nNo feasible HFVRP routes found.")
+
+    exit()
 routes_df = routes_df.sort_values(
     by="monthly_cost"
 )
