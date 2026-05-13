@@ -611,12 +611,13 @@ for vehicle_id in range(num_vehicles):
         vehicle_id
     )
     # =================================================
+# =================================================
 # FIXED VEHICLE COSTS
 # =================================================
 
-   for vehicle_id in range(num_vehicles):
+for vehicle_id in range(num_vehicles):
 
-     routing.SetFixedCostOfVehicle(
+    routing.SetFixedCostOfVehicle(
 
         int(vehicle_fixed_costs[vehicle_id]),
 
