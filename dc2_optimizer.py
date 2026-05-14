@@ -89,7 +89,7 @@ locations = []
 demands = []
 store_names = []
 
-# DC NODE
+# DEPOT NODE
 
 locations.append(
     (DC_LAT, DC_LON)
@@ -254,7 +254,7 @@ routing.AddDimension(
 )
 
 # =====================================================
-# MINIMIZE NUMBER OF VEHICLES
+# MINIMIZE VEHICLES
 # =====================================================
 
 for vehicle_id in range(vehicle_count):
@@ -371,9 +371,24 @@ if solution:
 
         index = routing.Start(vehicle_id)
 
+        route_nodes = []
+
         route_load = 0
 
-        route_nodes = []
+        # =============================================
+        # SKIP UNUSED VEHICLES
+        # =============================================
+
+        if routing.IsEnd(
+            solution.Value(
+                routing.NextVar(index)
+            )
+        ):
+            continue
+
+        # =============================================
+        # EXTRACT ROUTE
+        # =============================================
 
         while not routing.IsEnd(index):
 
@@ -393,8 +408,16 @@ if solution:
                 routing.NextVar(index)
             )
 
+        # =============================================
+        # SKIP EMPTY ROUTES
+        # =============================================
+
         if len(route_nodes) == 0:
             continue
+
+        # =============================================
+        # CALCULATE ACTUAL DISTANCE
+        # =============================================
 
         route_distance = (
             calculate_actual_route_distance(
@@ -402,10 +425,18 @@ if solution:
             )
         )
 
+        # =============================================
+        # FIND LOWEST COST TRUCK
+        # =============================================
+
         feasible_trucks = truck_df[
             truck_df["capacity_cft"]
             >= route_load
         ].copy()
+
+        # =============================================
+        # CORRECT MONTHLY COST FORMULA
+        # =============================================
 
         feasible_trucks["monthly_cost"] = (
 
@@ -413,11 +444,21 @@ if solution:
 
             +
 
-            feasible_trucks[
-                "variable_cost_per_km"
-            ] * route_distance
+            (
 
-        ) * MONTHLY_MULTIPLIER
+                feasible_trucks[
+                    "variable_cost_per_km"
+                ]
+
+                *
+
+                route_distance
+
+                *
+
+                MONTHLY_MULTIPLIER
+            )
+        )
 
         feasible_trucks = feasible_trucks.sort_values(
             by="monthly_cost"
@@ -425,35 +466,60 @@ if solution:
 
         selected_truck = feasible_trucks.iloc[0]
 
+        # =============================================
+        # TRUCK DETAILS
+        # =============================================
+
         truck_capacity = int(
             selected_truck["capacity_cft"]
         )
+
+        fixed_cost = float(
+            selected_truck["fixed_cost"]
+        )
+
+        variable_cost = float(
+            selected_truck[
+                "variable_cost_per_km"
+            ]
+        )
+
+        # =============================================
+        # FINAL MONTHLY COST
+        # =============================================
+
+        monthly_cost = (
+
+            fixed_cost
+
+            +
+
+            (
+
+                variable_cost
+
+                *
+
+                route_distance
+
+                *
+
+                MONTHLY_MULTIPLIER
+            )
+        )
+
+        # =============================================
+        # UTILIZATION
+        # =============================================
 
         utilization = (
             route_load / truck_capacity
         ) * 100
 
-        monthly_cost = (
+        # =============================================
+        # SAVE ROUTE
+        # =============================================
 
-    selected_truck["fixed_cost"]
-
-    +
-
-    (
-
-        selected_truck[
-            "variable_cost_per_km"
-        ]
-
-        *
-
-        route_distance
-
-        *
-
-        MONTHLY_MULTIPLIER
-    )
-)
         routes.append({
 
             "route_id":
@@ -482,6 +548,12 @@ if solution:
 
             "route_distance_km":
                 round(route_distance, 2),
+
+            "fixed_cost":
+                round(fixed_cost, 2),
+
+            "variable_cost_per_km":
+                round(variable_cost, 2),
 
             "monthly_cost":
                 round(monthly_cost, 2)
