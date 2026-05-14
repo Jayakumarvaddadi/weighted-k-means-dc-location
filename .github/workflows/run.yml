@@ -24,9 +24,9 @@ jobs:
       - run: python dc5_optimizer.py
       - run: python dc6_optimizer.py
       - run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
-          git add .
-          git commit -m "Auto update outputs" || echo "No changes"
-          git pull --rebase
-          git push
+         git config --global user.name "github-actions"
+         git config --global user.email "actions@github.com"
+         git add .
+         git commit -m "Auto update outputs" || echo "No changes"
+         git push origin main --force
+    
