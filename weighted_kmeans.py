@@ -684,13 +684,13 @@ if solution:
             feasible_trucks["fixed_cost"]
 
             +
-
+        (
             feasible_trucks[
                 "variable_cost_per_km"
             ] * route_distance
 
         ) * MONTHLY_MULTIPLIER
-
+        )
         feasible_trucks = feasible_trucks.sort_values(
             by="monthly_cost"
         )
