@@ -670,147 +670,103 @@ if solution:
 
             continue
 
-       # =================================================
-# FIND LOWEST COST TRUCK
-# =================================================
+      # =================================================
+        # FIND LOWEST COST TRUCK
+        # =================================================
 
-feasible_trucks = truck_df[
-    truck_df["capacity_cft"]
-    >= route_load
-].copy()
+        feasible_trucks = truck_df[
+            truck_df["capacity_cft"]
+            >= route_load
+        ].copy()
 
-# =================================================
-# CORRECT MONTHLY COST FORMULA
-# =================================================
+        feasible_trucks["monthly_cost"] = (
 
-feasible_trucks["monthly_cost"] = (
+            feasible_trucks["fixed_cost"]
 
-    feasible_trucks["fixed_cost"]
+            +
 
-    +
+            feasible_trucks[
+                "variable_cost_per_km"
+            ] * route_distance
 
-    (
+        ) * MONTHLY_MULTIPLIER
 
-        feasible_trucks[
-            "variable_cost_per_km"
-        ]
+        feasible_trucks = feasible_trucks.sort_values(
+            by="monthly_cost"
+        )
 
-        *
+        selected_truck = (
+            feasible_trucks.iloc[0]
+        )
 
-        route_distance
+        truck_capacity = int(round(
+            selected_truck["capacity_cft"]
+        ))
 
-        *
+        fixed_cost = float(
+            selected_truck["fixed_cost"]
+        )
 
-        MONTHLY_MULTIPLIER
-    )
-)
+        variable_cost = float(
+            selected_truck[
+                "variable_cost_per_km"
+            ]
+        )
 
-# =================================================
-# SELECT LOWEST COST TRUCK
-# =================================================
+        monthly_cost = (
 
-feasible_trucks = feasible_trucks.sort_values(
-    by="monthly_cost"
-)
+            fixed_cost
 
-selected_truck = (
-    feasible_trucks.iloc[0]
-)
+            +
+           (
+            variable_cost * route_distance
 
-# =================================================
-# TRUCK DETAILS
-# =================================================
+        ) * MONTHLY_MULTIPLIER )
 
-truck_capacity = int(round(
-    selected_truck["capacity_cft"]
-))
+        utilization = (
+            route_load / truck_capacity
+        ) * 100
 
-fixed_cost = float(
-    selected_truck["fixed_cost"]
-)
+        routes.append({
 
-variable_cost = float(
-    selected_truck[
-        "variable_cost_per_km"
-    ]
-)
+            "route_id":
+                f"R{route_id}",
 
-# =================================================
-# FINAL MONTHLY ROUTE COST
-# =================================================
+            "dc":
+                TARGET_DC,
 
-monthly_cost = (
+            "stores_served":
+                " -> ".join(route_nodes),
 
-    fixed_cost
+            "number_of_stores":
+                len(route_nodes),
 
-    +
+            "total_demand_cft":
+                round(route_load, 2),
 
-    (
+            "truck_selected":
+                selected_truck["truck_type"],
 
-        variable_cost
+            "truck_capacity_cft":
+                truck_capacity,
 
-        *
+            "truck_utilization_percent":
+                round(utilization, 2),
 
-        route_distance
+            "route_distance_km":
+                round(route_distance, 2),
 
-        *
+            "fixed_cost":
+                round(fixed_cost, 2),
 
-        MONTHLY_MULTIPLIER
-    )
-)
+            "variable_cost_per_km":
+                round(variable_cost, 2),
 
-# =================================================
-# UTILIZATION
-# =================================================
+            "monthly_cost":
+                round(monthly_cost, 2)
+        })
 
-utilization = (
-    route_load / truck_capacity
-) * 100
-
-# =================================================
-# SAVE ROUTE
-# =================================================
-
-routes.append({
-
-    "route_id":
-        f"R{route_id}",
-
-    "dc":
-        TARGET_DC,
-
-    "stores_served":
-        " -> ".join(route_nodes),
-
-    "number_of_stores":
-        len(route_nodes),
-
-    "total_demand_cft":
-        round(route_load, 2),
-
-    "truck_selected":
-        selected_truck["truck_type"],
-
-    "truck_capacity_cft":
-        truck_capacity,
-
-    "truck_utilization_percent":
-        round(utilization, 2),
-
-    "route_distance_km":
-        round(route_distance, 2),
-
-    "fixed_cost":
-        round(fixed_cost, 2),
-
-    "variable_cost_per_km":
-        round(variable_cost, 2),
-
-    "monthly_cost":
-        round(monthly_cost, 2)
-})
-
-route_id += 1
+        route_id += 1
 # =====================================================
 # SAVE OUTPUT
 # =====================================================
