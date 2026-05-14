@@ -434,12 +434,26 @@ if solution:
         ) * 100
 
         monthly_cost = (
-            selected_truck["fixed_cost"]
-            +
-            selected_truck["variable_cost_per_km"]
-            * route_distance
-        ) * MONTHLY_MULTIPLIER
 
+    selected_truck["fixed_cost"]
+
+    +
+
+    (
+
+        selected_truck[
+            "variable_cost_per_km"
+        ]
+
+        *
+
+        route_distance
+
+        *
+
+        MONTHLY_MULTIPLIER
+    )
+)
         routes.append({
 
             "route_id":
