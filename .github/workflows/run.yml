@@ -19,7 +19,10 @@ jobs:
       - run: pip install pandas numpy scikit-learn folium matplotlib openpyxl ortools
       - run: python weighted_kmeans.py
       - run: python dc2_optimizer.py
-
+      - run: python dc3_optimizer.py
+      - run: python dc4_optimizer.py
+      - run: python dc5_optimizer.py
+      - run: python dc6_optimizer.py
       - run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
